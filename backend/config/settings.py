@@ -1,6 +1,10 @@
 import os
 from typing import Optional
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 class Settings(BaseSettings):
     # Database Configuration
@@ -8,7 +12,7 @@ class Settings(BaseSettings):
     postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
     postgres_db: str = os.getenv("POSTGRES_DB", "ufdr_analysis")
     postgres_user: str = os.getenv("POSTGRES_USER", "postgres")
-    postgres_password: str = os.getenv("POSTGRES_PASSWORD", "postgres123")
+    postgres_password: str = os.getenv("POSTGRES_PASSWORD", "root")
     
     # Qdrant Configuration
     qdrant_url: str = os.getenv("QDRANT_URL", "localhost:6333")

@@ -10,6 +10,9 @@ from app.services.ai_service import ai_service
 from app.core.database_manager import db_manager
 from app.repositories.neo4j_repository import neo4j_repo
 from app.services.vector_service import vector_service
+from app.services.ufdr_report_generator import ufdr_report_generator
+from app.services.pdf_generator import pdf_generator
+from app.services.case_manager import case_manager
 
 router = APIRouter()
 
@@ -95,14 +98,23 @@ async def execute_query(request: QueryRequest):
     """Execute natural language query on forensic data"""
     
     try:
-        # Execute hybrid search
-        results = await ai_service.execute_hybrid_search(request.query)
+        # Get case number from request or use most recent active case
+        case_number = getattr(request, 'case_number', None)
+        if not case_number:
+            active_cases = case_manager.list_active_cases()
+            if active_cases:
+                case_number = active_cases[-1]  # Get the most recent case
+                print(f"🎯 Using most recent case: {case_number}")
+        
+        # Execute hybrid search with case context
+        results = await ai_service.execute_hybrid_search(request.query, case_number)
         
         # Generate investigation report
         report = await ai_service.generate_investigation_report(results)
         
         return JSONResponse(content={
             "query": request.query,
+            "case_number": case_number,
             "results": results,
             "report": report,
             "success": True
@@ -358,6 +370,200 @@ async def delete_case_vectors(case_id: str):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting case vectors: {str(e)}")
+
+@router.post("/generate-comprehensive-report")
+async def generate_comprehensive_report(case_number: str = Form(...)):
+    """Generate comprehensive UFDR analysis report with criminal risk assessment"""
+    
+    try:
+        print(f"📊 Generating comprehensive report for case: {case_number}")
+        
+        # Generate comprehensive report
+        report_result = await ufdr_report_generator.generate_comprehensive_report(case_number)
+        
+        if not report_result.get("success"):
+            raise HTTPException(
+                status_code=404, 
+                detail=report_result.get("error", "Failed to generate report")
+            )
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "Comprehensive report generated successfully",
+            "case_number": case_number,
+            "report": report_result
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error generating comprehensive report: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
+
+@router.post("/generate-pdf-report")
+async def generate_pdf_report(case_number: str = Form(...)):
+    """Generate PDF report for download"""
+    
+    try:
+        print(f"📄 Generating PDF report for case: {case_number}")
+        
+        # First generate comprehensive report
+        report_result = await ufdr_report_generator.generate_comprehensive_report(case_number)
+        
+        if not report_result.get("success"):
+            raise HTTPException(
+                status_code=404, 
+                detail=report_result.get("error", "Failed to generate report data")
+            )
+        
+        # Generate PDF
+        pdf_result = pdf_generator.generate_pdf_report(report_result)
+        
+        if not pdf_result.get("success"):
+            raise HTTPException(
+                status_code=500,
+                detail=pdf_result.get("error", "Failed to generate PDF")
+            )
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "PDF report generated successfully",
+            "case_number": case_number,
+            "pdf_data": pdf_result["pdf_data"],
+            "filename": pdf_result["filename"],
+            "size": pdf_result["size"]
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error generating PDF report: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
+
+@router.get("/quick-query")
+async def quick_query(q: str, case_number: Optional[str] = None):
+    """Quick query endpoint that returns concise, relevant answers for a specific case"""
+    
+    try:
+        print(f"🔍 Quick query: '{q}' (Case: {case_number})")
+        
+        # If no case specified, try to get the most recent active case
+        if not case_number:
+            active_cases = case_manager.list_active_cases()
+            if active_cases:
+                case_number = active_cases[-1]  # Get the most recent case
+                print(f"🎯 Using most recent case: {case_number}")
+            else:
+                print("⚠️ No case number provided and no active cases found")
+                return JSONResponse(content={
+                    "query": q,
+                    "case_number": None,
+                    "answer": "No active cases found. Please upload a UFDR file first to analyze forensic data.",
+                    "results_count": {"sql_results": 0, "vector_results": 0},
+                    "success": False
+                })
+        
+        # Execute search with case context
+        results = await ai_service.execute_hybrid_search(q, case_number)
+        
+        # Generate concise answer instead of full report
+        if ai_service.gemini_model:
+            try:
+                # Create concise prompt with case context
+                case_context = f" for case {case_number}" if case_number else ""
+                concise_prompt = f"""
+                Based on the following search results{case_context}, provide a concise, direct answer to the user's question: "{q}"
+                
+                Search Results:
+                - SQL Results: {len(results.get('sql_results', []))}
+                - Vector Results: {len(results.get('vector_results', []))}
+                
+                Sample Results:
+                {str(results.get('sql_results', [])[:2])}
+                {str(results.get('vector_results', [])[:2])}
+                
+                Provide a brief, focused answer (2-3 sentences max) that directly addresses what the user asked for.
+                If no relevant results found, say so clearly and mention the case context if applicable.
+                """
+                
+                response = ai_service.gemini_model.generate_content(concise_prompt)
+                if response and response.text:
+                    concise_answer = response.text.strip()
+                else:
+                    concise_answer = ai_service._generate_basic_report(results)
+            except:
+                concise_answer = ai_service._generate_basic_report(results)
+        else:
+            concise_answer = ai_service._generate_basic_report(results)
+        
+        return JSONResponse(content={
+            "query": q,
+            "case_number": case_number,
+            "answer": concise_answer,
+            "results_count": {
+                "sql_results": len(results.get('sql_results', [])),
+                "vector_results": len(results.get('vector_results', []))
+            },
+            "success": True
+        })
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+
+@router.post("/case/cleanup")
+async def cleanup_all_data():
+    """Clean all data from all databases"""
+    
+    try:
+        print("🗑️ Starting complete data cleanup...")
+        
+        cleanup_result = await case_manager.delete_all_case_data()
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "All data cleaned successfully",
+            "cleanup_result": cleanup_result
+        })
+        
+    except Exception as e:
+        print(f"❌ Error during cleanup: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during cleanup: {str(e)}")
+
+@router.get("/case/list")
+async def list_active_cases():
+    """List all active cases"""
+    
+    try:
+        cases = case_manager.list_active_cases()
+        
+        return JSONResponse(content={
+            "success": True,
+            "active_cases": cases,
+            "total_cases": len(cases)
+        })
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing cases: {str(e)}")
+
+@router.get("/case/{case_number}/info")
+async def get_case_info(case_number: str):
+    """Get information about a specific case"""
+    
+    try:
+        case_info = case_manager.get_case_info(case_number)
+        
+        if not case_info:
+            raise HTTPException(status_code=404, detail=f"Case {case_number} not found")
+        
+        return JSONResponse(content={
+            "success": True,
+            "case_info": case_info
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting case info: {str(e)}")
 
 @router.get("/health")
 async def health_check():

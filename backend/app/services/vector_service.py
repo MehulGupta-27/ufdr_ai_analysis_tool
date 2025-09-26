@@ -30,51 +30,38 @@ class VectorService:
         try:
             # Initialize Qdrant client
             if settings.qdrant_url and settings.qdrant_api_key:
+                logger.info(f"Initializing Qdrant client with URL: {settings.qdrant_url}")
                 self.qdrant_client = QdrantClient(
                     url=settings.qdrant_url,
                     api_key=settings.qdrant_api_key
                 )
-                logger.info("Connected to Qdrant vector database")
+                # Test connection
+                collections = self.qdrant_client.get_collections()
+                logger.info(f"✅ Connected to Qdrant vector database - {len(collections.collections)} collections found")
             else:
-                logger.warning("Qdrant configuration missing")
+                logger.warning(f"❌ Qdrant configuration missing - URL: {bool(settings.qdrant_url)}, API Key: {bool(settings.qdrant_api_key)}")
             
             # Initialize Azure OpenAI client
             if settings.embeddings_azure_endpoint and settings.embeddings_api_key:
+                logger.info(f"Initializing Azure OpenAI client with endpoint: {settings.embeddings_azure_endpoint}")
                 self.openai_client = AzureOpenAI(
                     azure_endpoint=settings.embeddings_azure_endpoint,
                     api_key=settings.embeddings_api_key,
                     api_version=settings.api_version
                 )
-                logger.info("Connected to Azure OpenAI for embeddings")
+                logger.info("✅ Connected to Azure OpenAI for embeddings")
             else:
-                logger.warning("Azure OpenAI configuration missing")
+                logger.warning(f"❌ Azure OpenAI configuration missing - Endpoint: {bool(settings.embeddings_azure_endpoint)}, API Key: {bool(settings.embeddings_api_key)}")
+        except Exception as e:
+            logger.error(f"❌ Error initializing vector service clients: {e}")
+            import traceback
+            traceback.print_exc()
                 
         except Exception as e:
             logger.error(f"Failed to initialize vector service: {str(e)}")
     
-    async def initialize_collection(self):
-        """Initialize the Qdrant collection."""
-        if not self.qdrant_client:
-            logger.warning("Qdrant client not available")
-            return
-        
-        try:
-            # Check if collection exists
-            collections = self.qdrant_client.get_collections()
-            collection_names = [col.name for col in collections.collections]
-            
-            if self.collection_name not in collection_names:
-                # Create collection with 3072 dimensions (text-embedding-3-large)
-                self.qdrant_client.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=VectorParams(size=3072, distance=Distance.COSINE)
-                )
-                logger.info(f"Created Qdrant collection: {self.collection_name}")
-            else:
-                logger.info(f"Qdrant collection already exists: {self.collection_name}")
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize collection: {str(e)}")
+    # Removed: initialize_collection() - Collections are now created dynamically per case only
+    # This eliminates the generic 'forensic_data' collection
     
     async def generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using Azure OpenAI."""
@@ -119,7 +106,7 @@ class VectorService:
                     "sentiment_score": message_data.get('sentiment_score', 0.0),
                     "suspicious_score": message_data.get('suspicious_score', 0.0),
                     "keywords": message_data.get('keywords', []),
-                    "data_type": "message"
+                    "data_type": "chat_record"
                 }
             )
             
@@ -216,7 +203,7 @@ class VectorService:
                     "confidence_score": finding_data.get('confidence_score', 0.0),
                     "recommendations": finding_data.get('recommendations', []),
                     "searchable_text": finding_text,
-                    "data_type": "finding"
+                    "data_type": "media_file"
                 }
             )
             
@@ -291,7 +278,7 @@ class VectorService:
         return await self.semantic_search(
             query=message_content,
             case_id=case_id,
-            data_types=["message"],
+            data_types=["chat_record"],
             limit=limit
         )
     
@@ -311,7 +298,7 @@ class VectorService:
         return await self.semantic_search(
             query=query,
             case_id=case_id,
-            data_types=["finding"],
+            data_types=["media_file"],
             limit=limit
         )
     
@@ -348,6 +335,76 @@ class VectorService:
         except Exception as e:
             logger.error(f"Failed to delete case vectors: {str(e)}")
             return False
+    
+    async def search_case_collection(
+        self,
+        query: str,
+        collection_name: str,
+        data_types: Optional[List[str]] = None,
+        limit: int = 20,
+        score_threshold: float = 0.3
+    ) -> List[Dict[str, Any]]:
+        """Perform semantic search in a specific case collection."""
+        if not self.qdrant_client:
+            logger.warning("Qdrant client not available")
+            return []
+        
+        try:
+            # Check if collection exists
+            collections = self.qdrant_client.get_collections()
+            collection_names = [col.name for col in collections.collections]
+            
+            if collection_name not in collection_names:
+                logger.warning(f"Collection {collection_name} does not exist")
+                return []
+            
+            # Generate query embedding using AI service
+            from app.services.ai_service import ai_service
+            query_embeddings = await ai_service.generate_embeddings([query])
+            if not query_embeddings:
+                logger.warning("Failed to generate query embedding")
+                return []
+            
+            query_embedding = query_embeddings[0]
+            logger.info(f"🔍 Generated query embedding with {len(query_embedding)} dimensions")
+            
+            # Build search filter for data types
+            search_filter = None
+            if data_types:
+                conditions = []
+                for data_type in data_types:
+                    conditions.append(FieldCondition(key="data_type", match=MatchValue(value=data_type)))
+                
+                if conditions:
+                    search_filter = Filter(should=conditions)
+                    logger.info(f"🎯 Filtering by data types: {data_types}")
+            
+            # Perform search
+            search_results = self.qdrant_client.search(
+                collection_name=collection_name,
+                query_vector=query_embedding,
+                query_filter=search_filter,
+                limit=limit,
+                score_threshold=score_threshold,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            # Format results
+            results = []
+            for result in search_results:
+                results.append({
+                    "id": result.id,
+                    "score": result.score,
+                    "payload": result.payload
+                })
+            
+            logger.info(f"✅ Case collection search in {collection_name} returned {len(results)} results")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Case collection search failed: {str(e)}")
+            return []
 
 
 # Global vector service instance

@@ -1,20 +1,23 @@
 # UFDR Analysis System
 
-An AI-based Universal Forensic Extraction Device Report (UFDR) analysis system that enables investigating officers to query forensic data using natural language and get intelligent insights through a hybrid approach combining vector databases, SQL databases, and graph databases.
+An AI-powered forensic analysis system for processing Universal Forensic Data Reader (UFDR) files. Features a modern React frontend and FastAPI backend with intelligent query processing and comprehensive report generation.
 
 ## Features
 
-- **Multi-format UFDR Parsing**: Supports XML, JSON, CSV, and XLSX formats
-- **Hybrid Database Architecture**: 
-  - PostgreSQL for structured data storage
-  - Qdrant for semantic vector search
-  - Neo4j for relationship analysis
-  - Redis for caching
-- **Natural Language Queries**: Query forensic data using plain English
-- **AI-Powered Analysis**: Uses Azure OpenAI for embeddings and Google Gemini for query processing
-- **Connection Analysis**: Discover relationships between contacts and communications
-- **Interactive Dashboard**: Real-time analytics and visualizations
-- **Comprehensive Reporting**: Generate investigation reports automatically
+### Core Capabilities
+- **UFDR File Processing**: Upload and analyze forensic data from mobile devices
+- **AI-Powered Queries**: Ask natural language questions about forensic data
+- **Comprehensive Reporting**: Generate detailed forensic investigation reports
+- **PDF Export**: Download professional reports for case documentation
+- **Risk Assessment**: AI-driven criminal risk scoring for contacts
+- **Modern Web Interface**: Clean, responsive React-based frontend
+
+### Analysis Features
+- **Smart Query Processing**: Intelligent responses to forensic questions
+- **Communication Analysis**: Detect suspicious patterns and relationships
+- **Timeline Analysis**: Chronological event mapping
+- **Network Mapping**: Identify key players and communication hubs
+- **Evidence Detection**: Highlight potential criminal activities
 
 ## Architecture
 
@@ -30,24 +33,75 @@ An AI-based Universal Forensic Extraction Device Report (UFDR) analysis system t
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
-## Prerequisites
-
-- Python 3.8+
-- Node.js 16+
-- Docker and Docker Compose
-- Azure OpenAI API access
-- Google Gemini API access
-
 ## Quick Start
 
-### 1. Clone the Repository
+### Prerequisites
+- Python 3.8+
+- Node.js 16+
+- npm (comes with Node.js)
 
+### Easy Setup (Windows)
+
+1. **Clone the repository**
 ```bash
 git clone <repository-url>
 cd ufdr-analysis-system
 ```
 
-### 2. Environment Setup
+2. **Install Python dependencies**
+```bash
+pip install -r requirements.txt
+```
+
+3. **Start the system**
+```bash
+start_both.bat
+```
+
+This will:
+- Start the backend server on http://localhost:8001
+- Start the frontend on http://localhost:3000
+- Open your browser automatically
+
+### Manual Setup
+
+#### Backend
+```bash
+python backend_demo.py
+```
+
+#### Frontend (in new terminal)
+```bash
+cd frontend
+npm install
+npm start
+```
+
+## Usage
+
+### Web Interface
+1. Open http://localhost:3000 in your browser
+2. Upload a UFDR file with case information
+3. Use the AI Analyzer to ask questions like:
+   - "Find WhatsApp messages about meetings"
+   - "Who sent verification codes?"
+   - "Show me suspicious communications"
+4. Generate and download comprehensive PDF reports
+
+### Sample Queries
+- **Meeting Analysis**: "Find messages about meetings"
+- **Security Threats**: "Show me verification codes"
+- **Suspicious Activity**: "Analyze suspicious communications"
+- **Network Analysis**: "Show me communication patterns"
+- **Risk Assessment**: "What are the risk scores?"
+
+## API Endpoints
+
+- **Health Check**: `GET /api/v1/health`
+- **Upload File**: `POST /api/v1/upload-ufdr`
+- **Query Data**: `GET /api/v1/quick-query?q=<query>`
+- **Generate Report**: `POST /api/v1/generate-comprehensive-report`
+- **Download PDF**: `POST /api/v1/generate-pdf-report`
 
 Copy the `.env` file and update with your API keys and database credentials:
 

@@ -1,12 +1,8 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -20,95 +16,109 @@ parts/
 sdist/
 var/
 wheels/
-pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Translations
-*.mo
-*.pot
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# Django stuff:
+# Logs
+logs/
 *.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
 
-# Flask stuff:
-instance/
-.webassets-cache
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-# Scrapy stuff:
-.scrapy
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
 
-# Sphinx documentation
-docs/_build/
+# Test files
+test_*.py
+*_test.py
+tests/
+coverage/
+.coverage
+.pytest_cache/
+.tox/
 
-# PyBuilder
-target/
+# UFDR test files (keep sample files but ignore test outputs)
+test_*.ufdr
+*_test.ufdr
+extracted_*/
+processed_*/
+
+# Node.js (Frontend)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.eslintcache
+
+# Build outputs
+build/
+dist/
+
+# Docker
+.dockerignore
 
 # Jupyter Notebook
 .ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
 
 # pyenv
 .python-version
 
 # pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
+Pipfile.lock
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow
+# PEP 582
 __pypackages__/
 
-# Celery stuff
+# Celery
 celerybeat-schedule
 celerybeat.pid
 
 # SageMath parsed files
 *.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
 
 # Spyder project settings
 .spyderproject
@@ -128,65 +138,8 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# pytype static type analyzer
+.pytype/
 
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Project specific
-*.ufdr
-*.zip
-temp/
-logs/
-data/
-uploads/
-cache/
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Node.js (if any frontend dependencies)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Docker
-.dockerignore
-
-# Test files and temporary scripts
-test_*.py
-debug_*.py
-demo_*.py
-fix_*.py
-check_*.py
-clear_*.py
-comprehensive_*.py
-index_*.py
-start_*.py
-start_*.bat
-*.bat
-
-# Documentation that might be outdated
-STARTUP_GUIDE.md
-SYSTEM_IMPLEMENTATION_SUMMARY.md
-SYSTEM_STATUS_FINAL.md
-
-# Frontend build artifacts (when recreated)
-frontend/dist/
-frontend/build/
-frontend/.next/
-frontend/out/
+# Cython debug symbols
+cython_debug/

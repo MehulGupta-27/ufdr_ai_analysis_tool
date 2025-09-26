@@ -2,6 +2,10 @@
 Enhanced UFDR Analysis System with Neo4j, Vector Search, and AI.
 """
 
+# Load environment variables first
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -34,28 +38,18 @@ async def lifespan(app: FastAPI):
         create_tables()
         logger.info("PostgreSQL tables created successfully")
     except Exception as e:
-        logger.error(f"Failed to create PostgreSQL tables: {str(e)}")
+        logger.warning(f"PostgreSQL tables creation failed: {str(e)} - continuing without PostgreSQL")
     
-    try:
-        # Create Qdrant collections
-        db_manager.create_qdrant_collections()
-        logger.info("Qdrant collections created successfully")
-    except Exception as e:
-        logger.warning(f"Qdrant collections creation failed: {str(e)}")
-    
-    try:
-        # Initialize vector collection
-        await vector_service.initialize_collection()
-        logger.info("Vector service initialized successfully")
-    except Exception as e:
-        logger.warning(f"Vector service initialization failed: {str(e)}")
+    # Note: Qdrant collections will be created dynamically per case
+    # No need to create demo collections at startup
+    logger.info("Qdrant will create collections dynamically per case")
     
     try:
         # Test Neo4j connection
         await neo4j_repo.execute_cypher("RETURN 1")
         logger.info("Neo4j connection established successfully")
     except Exception as e:
-        logger.warning(f"Neo4j connection failed: {str(e)}")
+        logger.warning(f"Neo4j connection failed: {str(e)} - continuing without graph database")
     
     logger.info("Application startup completed")
     
@@ -129,9 +123,19 @@ async def get_system_info():
         }
     }
 
+@app.get("/api/v1/health")
+async def health_check():
+    """Simple health check endpoint"""
+    return {
+        "status": "healthy",
+        "message": "UFDR Analysis System is running",
+        "port": settings.app_port,
+        "version": "2.0.0"
+    }
+
 if __name__ == "__main__":
     uvicorn.run(
-        "backend.main:app",
+        "main:app",
         host=settings.app_host,
         port=settings.app_port,
         reload=settings.debug,

@@ -44,24 +44,8 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error initializing database connections: {e}")
     
-    def create_qdrant_collections(self):
-        """Create Qdrant collections for different data types"""
-        collections = [
-            ("chat_messages", 3072),  # Azure OpenAI text-embedding-3-large dimension
-            ("call_records", 3072),
-            ("media_files", 3072),
-            ("contacts", 3072)
-        ]
-        
-        for collection_name, vector_size in collections:
-            try:
-                self.qdrant_client.create_collection(
-                    collection_name=collection_name,
-                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
-                )
-                print(f"Created Qdrant collection: {collection_name}")
-            except Exception as e:
-                print(f"Collection {collection_name} might already exist: {e}")
+    # Removed: create_qdrant_collections() - Collections are now created dynamically per case
+    # This eliminates demo collections and ensures only case-specific collections exist
     
     def store_vector_data(self, collection_name: str, points: List[PointStruct]):
         """Store vector data in Qdrant"""

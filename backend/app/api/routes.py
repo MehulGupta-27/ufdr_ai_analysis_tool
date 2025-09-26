@@ -13,6 +13,8 @@ from app.services.vector_service import vector_service
 from app.services.ufdr_report_generator import ufdr_report_generator
 from app.services.pdf_generator import pdf_generator
 from app.services.case_manager import case_manager
+from app.models.database import get_db
+from sqlalchemy import text
 
 router = APIRouter()
 
@@ -40,12 +42,12 @@ async def upload_ufdr_file(
         print(f"📋 Case number: {case_number}")
         print(f"👤 Investigator: {investigator}")
         
-        # Validate file type - accept more formats for UFDR
-        allowed_extensions = ('.xml', '.json', '.csv', '.xlsx', '.ufdr', '.zip', '.txt')
+        # Validate file type - accept ONLY .ufdr as per new strict parser
+        allowed_extensions = ('.ufdr',)
         if not file.filename.lower().endswith(allowed_extensions):
             raise HTTPException(
                 status_code=400, 
-                detail=f"Unsupported file format. Please upload one of: {', '.join(allowed_extensions)}"
+                detail=f"Unsupported file format. Please upload a .ufdr file"
             )
         
         # Get file size
@@ -210,8 +212,7 @@ async def get_analytics_summary():
     """Get analytics summary of processed data"""
     
     try:
-        # This would typically query the database for statistics
-        # For now, return placeholder data
+        # Dynamic overall statistics across active cases
         summary = {
             "total_cases": 0,
             "total_chat_records": 0,
@@ -220,7 +221,22 @@ async def get_analytics_summary():
             "total_media_files": 0,
             "recent_activity": []
         }
-        
+        db = next(get_db())
+        active_cases = case_manager.list_active_cases()
+        summary["total_cases"] = len(active_cases)
+        for case in active_cases:
+            info = case_manager.get_case_info(case)
+            if not info:
+                continue
+            schema = f"case_{info['safe_case_name']}"
+            try:
+                summary["total_chat_records"] += db.execute(text(f"SELECT COUNT(*) FROM {schema}.chat_records")).scalar() or 0
+                summary["total_call_records"] += db.execute(text(f"SELECT COUNT(*) FROM {schema}.call_records")).scalar() or 0
+                summary["total_contacts"] += db.execute(text(f"SELECT COUNT(*) FROM {schema}.contacts")).scalar() or 0
+                summary["total_media_files"] += db.execute(text(f"SELECT COUNT(*) FROM {schema}.media_files")).scalar() or 0
+            except Exception:
+                continue
+        db.close()
         return JSONResponse(content=summary)
         
     except Exception as e:
@@ -466,33 +482,10 @@ async def quick_query(q: str, case_number: Optional[str] = None):
         # Execute search with case context
         results = await ai_service.execute_hybrid_search(q, case_number)
         
-        # Generate concise answer instead of full report
-        if ai_service.gemini_model:
-            try:
-                # Create concise prompt with case context
-                case_context = f" for case {case_number}" if case_number else ""
-                concise_prompt = f"""
-                Based on the following search results{case_context}, provide a concise, direct answer to the user's question: "{q}"
-                
-                Search Results:
-                - SQL Results: {len(results.get('sql_results', []))}
-                - Vector Results: {len(results.get('vector_results', []))}
-                
-                Sample Results:
-                {str(results.get('sql_results', [])[:2])}
-                {str(results.get('vector_results', [])[:2])}
-                
-                Provide a brief, focused answer (2-3 sentences max) that directly addresses what the user asked for.
-                If no relevant results found, say so clearly and mention the case context if applicable.
-                """
-                
-                response = ai_service.gemini_model.generate_content(concise_prompt)
-                if response and response.text:
-                    concise_answer = response.text.strip()
-                else:
-                    concise_answer = ai_service._generate_basic_report(results)
-            except:
-                concise_answer = ai_service._generate_basic_report(results)
+        # Dynamic itemized answer for show/list style queries, otherwise fallback
+        show_words = ["show", "list", "display", "all", "results"]
+        if any(w in q.lower() for w in show_words):
+            concise_answer = ai_service.render_itemized_answer(q, results)
         else:
             concise_answer = ai_service._generate_basic_report(results)
         
@@ -565,6 +558,34 @@ async def get_case_info(case_number: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting case info: {str(e)}")
 
+@router.get("/case/{case_number}/counts")
+async def get_case_counts(case_number: str):
+    """Dynamic per-case counts using SQL only."""
+    try:
+        info = case_manager.get_case_info(case_number)
+        if not info:
+            raise HTTPException(status_code=404, detail=f"Case {case_number} not found")
+        schema = f"case_{info['safe_case_name']}"
+        db = next(get_db())
+        counts = {
+            "chat_records": 0,
+            "call_records": 0,
+            "contacts": 0,
+            "media_files": 0
+        }
+        try:
+            counts["chat_records"] = db.execute(text(f"SELECT COUNT(*) FROM {schema}.chat_records")).scalar() or 0
+            counts["call_records"] = db.execute(text(f"SELECT COUNT(*) FROM {schema}.call_records")).scalar() or 0
+            counts["contacts"] = db.execute(text(f"SELECT COUNT(*) FROM {schema}.contacts")).scalar() or 0
+            counts["media_files"] = db.execute(text(f"SELECT COUNT(*) FROM {schema}.media_files")).scalar() or 0
+        finally:
+            db.close()
+        return JSONResponse(content={"success": True, "case_number": case_number, "counts": counts})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting case counts: {str(e)}")
+
 @router.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -605,3 +626,26 @@ async def health_check():
                 "error": str(e)
             }
         )
+
+@router.post("/admin/cleanup-all")
+async def admin_cleanup_all():
+    """Delete all case data from Postgres, Qdrant, Neo4j and clear Redis cache."""
+    try:
+        cleanup_result = await case_manager.delete_all_case_data()
+        from app.core.database_manager import db_manager
+        cache_cleared = db_manager.clear_cache()
+        return JSONResponse(content={
+            "success": True,
+            "cleanup": cleanup_result,
+            "cache_cleared": cache_cleared
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+
+@router.get("/admin/cache-status")
+async def admin_cache_status():
+    """Check Redis caching availability."""
+    from app.core.database_manager import db_manager
+    return JSONResponse(content={
+        "redis_alive": db_manager.ping_redis()
+    })

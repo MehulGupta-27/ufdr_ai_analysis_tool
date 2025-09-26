@@ -205,7 +205,7 @@ const UploadPage = ({ onCaseCreated }) => {
                 id="file-input"
                 className="file-input"
                 onChange={handleFileChange}
-                accept=".xml,.json,.csv,.xlsx,.ufdr,.zip,.txt"
+                accept=".ufdr"
               />
               
               {!file ? (

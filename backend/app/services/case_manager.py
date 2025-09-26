@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlalchemy import text
 from qdrant_client.models import Distance, VectorParams, CollectionInfo
 from app.models.database import get_db
+from config.settings import settings
 from app.core.database_manager import db_manager
 from app.repositories.neo4j_repository import neo4j_repo
 from app.services.vector_service import vector_service
@@ -20,6 +21,8 @@ class CaseManager:
     
     def __init__(self):
         self.active_cases = {}
+        # Restore cases from database on startup
+        self._restore_cases_from_database()
     
     async def create_case_environment(self, case_number: str, investigator: str) -> Dict[str, Any]:
         """Create isolated environment for a new case across all databases."""
@@ -103,12 +106,22 @@ class CaseManager:
         if safe_name[0].isdigit():
             safe_name = f"case_{safe_name}"
         return safe_name
+
+    def sanitize_case_name(self, case_number: str) -> str:
+        """Public helper to sanitize case number consistently across services."""
+        return self._sanitize_case_name(case_number)
     
     async def _create_postgres_case_schema(self, safe_case_name: str) -> Dict[str, Any]:
         """Create PostgreSQL schema for case-specific data."""
         
         try:
             db = next(get_db())
+            
+            # Ensure required extensions (for gen_random_uuid)
+            try:
+                db.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            except Exception:
+                pass
             
             # Create schema for the case
             schema_name = f"case_{safe_case_name}"
@@ -227,21 +240,31 @@ class CaseManager:
             except:
                 pass  # Collection might not exist
             
-            # Create new collection with proper dimensions and indexing for text-embedding-3-large
+            # Create new collection with proper dimensions based on the active embedder
             from qdrant_client.models import PayloadSchemaType
+            try:
+                detected_dim = vector_service.get_embedding_dimension()
+            except Exception:
+                detected_dim = None
+            vector_size = detected_dim or settings.embedding_dimension
             
             vector_service.qdrant_client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(
-                    size=3072,  # text-embedding-3-large dimensions
+                    size=vector_size,
                     distance=Distance.COSINE
                 )
             )
             
-            # Create payload index for data_type field to enable filtering
+            # Create payload indexes for filtering and search
             vector_service.qdrant_client.create_payload_index(
                 collection_name=collection_name,
                 field_name="data_type",
+                field_schema=PayloadSchemaType.KEYWORD
+            )
+            vector_service.qdrant_client.create_payload_index(
+                collection_name=collection_name,
+                field_name="ufdr_report_id",
                 field_schema=PayloadSchemaType.KEYWORD
             )
             
@@ -250,7 +273,7 @@ class CaseManager:
             return {
                 "status": "success",
                 "collection_name": collection_name,
-                "vector_size": 3072,
+                "vector_size": vector_size,
                 "distance_metric": "cosine"
             }
             
@@ -408,6 +431,60 @@ class CaseManager:
     def list_active_cases(self) -> List[str]:
         """List all active case numbers."""
         return list(self.active_cases.keys())
+    
+    def _restore_cases_from_database(self):
+        """Restore case information from existing database schemas."""
+        try:
+            db = next(get_db())
+            
+            # Get all case schemas
+            schemas_result = db.execute(text("""
+                SELECT schema_name 
+                FROM information_schema.schemata 
+                WHERE schema_name LIKE 'case_%'
+                ORDER BY schema_name
+            """)).fetchall()
+            
+            for row in schemas_result:
+                schema_name = row[0]
+                # Extract case number from schema name (remove 'case_' prefix)
+                case_number = schema_name[5:]  # Remove 'case_' prefix
+                
+                # Get case info from UFDR reports in this schema
+                try:
+                    report_result = db.execute(text(f"""
+                        SELECT case_number, investigator, created_at, filename
+                        FROM {schema_name}.ufdr_reports 
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """)).fetchone()
+                    
+                    if report_result:
+                        # Reconstruct case info
+                        case_info = {
+                            "case_number": report_result.case_number,
+                            "safe_case_name": case_number,
+                            "investigator": report_result.investigator,
+                            "created_at": report_result.created_at.isoformat() if report_result.created_at else None,
+                            "filename": report_result.filename,
+                            "databases": {
+                                "postgresql": {"status": "restored", "schema_name": schema_name},
+                                "qdrant": {"status": "unknown"},
+                                "neo4j": {"status": "unknown"}
+                            }
+                        }
+                        
+                        self.active_cases[report_result.case_number] = case_info
+                        logger.info(f"✅ Restored case {report_result.case_number} from database")
+                        
+                except Exception as e:
+                    logger.warning(f"Could not restore case info for schema {schema_name}: {e}")
+            
+            db.close()
+            logger.info(f"🔄 Restored {len(self.active_cases)} cases from database")
+            
+        except Exception as e:
+            logger.error(f"Error restoring cases from database: {e}")
 
 
 # Global case manager instance

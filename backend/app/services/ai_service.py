@@ -1,4 +1,3 @@
-import openai
 import google.generativeai as genai
 from typing import List, Dict, Any, Optional, Tuple
 import json
@@ -12,23 +11,8 @@ class AIService:
         
     def _setup_clients(self):
         """Setup AI service clients"""
-        # Setup Azure OpenAI for embeddings (using new client)
-        try:
-            from openai import AzureOpenAI
-            if settings.embeddings_azure_endpoint and settings.embeddings_api_key:
-                print(f"🔧 Setting up Azure OpenAI client with endpoint: {settings.embeddings_azure_endpoint}")
-                self.openai_client = AzureOpenAI(
-                    azure_endpoint=settings.embeddings_azure_endpoint,
-                    api_key=settings.embeddings_api_key,
-                    api_version=settings.api_version
-                )
-                print(f"✅ Azure OpenAI client setup successful")
-            else:
-                print(f"❌ Azure OpenAI configuration missing - Endpoint: {bool(settings.embeddings_azure_endpoint)}, API Key: {bool(settings.embeddings_api_key)}")
-                self.openai_client = None
-        except Exception as e:
-            print(f"❌ Azure OpenAI setup failed: {e}")
-            self.openai_client = None
+        # No Azure OpenAI - embeddings handled by VectorService
+        self.openai_client = None
         
         # Setup Gemini for query processing
         try:
@@ -48,28 +32,23 @@ class AIService:
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using Azure OpenAI"""
         try:
-            if not self.openai_client:
-                print("⚠️ Azure OpenAI client not available, using dummy embeddings")
-                # Return dummy embeddings with correct dimensions (3072 for text-embedding-3-large)
-                return [self._generate_dummy_embedding(text, 3072) for text in texts]
-            
+            # Delegate to VectorService local embedder for consistency
+            from app.services.vector_service import vector_service
             embeddings = []
             for text in texts:
-                response = self.openai_client.embeddings.create(
-                    model=settings.azure_embedding_model,
-                    input=text
-                )
-                embeddings.append(response.data[0].embedding)
-                
+                vec = await vector_service.generate_embedding(text)
+                if not vec:
+                    # Fallback: minimal dummy vector of configured size
+                    vec = self._generate_dummy_embedding(text, settings.embedding_dimension)
+                embeddings.append(vec)
             print(f"✅ Generated {len(embeddings)} embeddings with {len(embeddings[0])} dimensions")
             return embeddings
             
         except Exception as e:
             print(f"❌ Error generating embeddings: {e}")
-            # Return dummy embeddings with correct dimensions (3072 for text-embedding-3-large)
-            return [self._generate_dummy_embedding(text, 3072) for text in texts]
+            return [self._generate_dummy_embedding(text, settings.embedding_dimension) for text in texts]
     
-    def _generate_dummy_embedding(self, text: str, dimensions: int = 3072) -> List[float]:
+    def _generate_dummy_embedding(self, text: str, dimensions: int = 768) -> List[float]:
         """Generate a dummy embedding based on text content for testing"""
         import hashlib
         import struct
@@ -146,6 +125,15 @@ class AIService:
                     if response_text:
                         analysis = json.loads(response_text)
                         print(f"🧠 AI Analysis: {analysis}")
+                        
+                        # Post-process AI analysis to ensure device_info is included for device queries
+                        query_lower = query.lower()
+                        device_keywords = ["device", "imei", "model", "manufacturer", "serial", "os version", "android", "ios", "phone number", "extraction tool", "case officer", "operating system", "os", "hardware", "specifications"]
+                        if any(word in query_lower for word in device_keywords):
+                            if "device_info" not in analysis.get("target_data", []):
+                                analysis["target_data"].append("device_info")
+                                print(f"🔧 Added device_info to AI analysis target_data")
+                        
                         return analysis
                         
         except Exception as e:
@@ -264,6 +252,13 @@ class AIService:
             target_data.append("contacts")
         if any(word in query_lower for word in ["media", "file", "image", "video", "photo"]):
             target_data.append("media_files")
+        # Device metadata - detect device-related queries FIRST
+        device_keywords = ["device", "imei", "model", "manufacturer", "serial", "os version", "android", "ios", "phone number", "extraction tool", "case officer", "operating system", "os", "hardware", "specifications"]
+        if any(word in query_lower for word in device_keywords):
+            target_data.append("device_info")
+        # Generic artifacts → include all data-bearing tables
+        if "artifact" in query_lower or "artifacts" in query_lower:
+            target_data = ["chat_records", "call_records", "contacts", "media_files", "device_info"]
         
         # If no specific data types detected, search all
         if not target_data:
@@ -449,20 +444,45 @@ class AIService:
         try:
             # Execute SQL search (always for structured data)
             if search_approach in ["sql_only", "hybrid"]:
-                # First try to generate SQL using LLM
-                if self.gemini_model and analysis.get("intent") != "count":
-                    try:
-                        generated_sql = await self.generate_sql_query(query, analysis)
-                        if generated_sql:
-                            print(f"🤖 Generated SQL query: {generated_sql[:100]}...")
-                            sql_results = await self._execute_generated_sql(generated_sql, case_number)
-                        else:
+                # Check if this is a device_info query - handle it specially
+                query_lower = query.lower()
+                device_keywords = ["device", "imei", "model", "manufacturer", "serial", "os version", "android", "ios", "phone number", "extraction tool", "case officer", "operating system", "os", "hardware", "specifications"]
+                is_device_query = any(word in query_lower for word in device_keywords)
+                
+                if is_device_query and "device_info" in target_data:
+                    # Device query - prioritize device_info search
+                    print(f"🔧 Detected device query, using device_info search")
+                    sql_results = await self._execute_device_info_search(case_number)
+                elif "device_info" in target_data:
+                    # Mixed query - try LLM first, then fallback
+                    if self.gemini_model and analysis.get("intent") != "count":
+                        try:
+                            generated_sql = await self.generate_sql_query(query, analysis)
+                            if generated_sql:
+                                print(f"🤖 Generated SQL query: {generated_sql[:100]}...")
+                                sql_results = await self._execute_generated_sql(generated_sql, case_number)
+                            else:
+                                sql_results = await self._execute_sql_search(query, analysis, case_number)
+                        except Exception as e:
+                            print(f"⚠️ LLM SQL generation failed: {e}, falling back to template search")
                             sql_results = await self._execute_sql_search(query, analysis, case_number)
-                    except Exception as e:
-                        print(f"⚠️ LLM SQL generation failed: {e}, falling back to template search")
+                    else:
                         sql_results = await self._execute_sql_search(query, analysis, case_number)
                 else:
-                    sql_results = await self._execute_sql_search(query, analysis, case_number)
+                    # Regular query - use LLM or template
+                    if self.gemini_model and analysis.get("intent") != "count":
+                        try:
+                            generated_sql = await self.generate_sql_query(query, analysis)
+                            if generated_sql:
+                                print(f"🤖 Generated SQL query: {generated_sql[:100]}...")
+                                sql_results = await self._execute_generated_sql(generated_sql, case_number)
+                            else:
+                                sql_results = await self._execute_sql_search(query, analysis, case_number)
+                        except Exception as e:
+                            print(f"⚠️ LLM SQL generation failed: {e}, falling back to template search")
+                            sql_results = await self._execute_sql_search(query, analysis, case_number)
+                    else:
+                        sql_results = await self._execute_sql_search(query, analysis, case_number)
                 
                 if sql_results:
                     results["sql_results"] = sql_results
@@ -624,184 +644,108 @@ class AIService:
                         answer += f"• {result['description']}\n"
                     return answer
         
-        # Handle regular search results
+        # Handle regular search results - show actual data, not generic descriptions
         all_results = sql_results + vector_results
         if not all_results:
             return f"**No results found for: {query}**\n\nThe uploaded data doesn't contain information matching your query. Try different keywords or check what data is available."
         
-        # Group results by type for better presentation
-        chat_results = [r for r in all_results if r.get('type') == 'chat_record']
-        call_results = [r for r in all_results if r.get('type') == 'call_record']
-        contact_results = [r for r in all_results if r.get('type') == 'contact']
-        media_results = [r for r in all_results if r.get('type') == 'media_file']
+        # For "show/list" queries, use the itemized renderer
+        show_words = ["show", "list", "display", "all", "results"]
+        if any(w in query.lower() for w in show_words):
+            return self.render_itemized_answer(query, search_results)
         
+        # For other queries, show actual data with context
         answer = f"**Found {len(all_results)} results for: {query}**\n\n"
         
-        # Show chat messages
-        if chat_results:
-            answer += f"**💬 Chat Messages ({len(chat_results)}):**\n"
-            for i, result in enumerate(chat_results[:5], 1):
-                app = result.get('app_name', 'Unknown')
-                sender = result.get('sender', 'Unknown')
-                content = result.get('content', 'N/A')
-                timestamp = result.get('timestamp', 'Unknown')
-                
-                # Truncate long messages
-                if len(content) > 100:
-                    content = content[:100] + "..."
-                
-                answer += f"{i}. **{app}** ({timestamp})\n"
-                answer += f"   From: {sender}\n"
-                answer += f"   Message: {content}\n\n"
+        # Show actual data from results, not generic descriptions
+        for i, result in enumerate(all_results[:10], 1):  # Limit to first 10 for readability
+            result_type = result.get('type', 'unknown')
+            answer += f"**{i}. {result_type.replace('_', ' ').title()}:**\n"
             
-            if len(chat_results) > 5:
-                answer += f"   ... and {len(chat_results) - 5} more messages\n\n"
-        
-        # Show call records
-        if call_results:
-            answer += f"**📞 Call Records ({len(call_results)}):**\n"
-            for i, result in enumerate(call_results[:5], 1):
-                caller = result.get('caller', 'Unknown')
-                receiver = result.get('receiver', 'Unknown')
-                call_type = result.get('call_type', 'Unknown')
-                duration = result.get('duration', 0)
-                timestamp = result.get('timestamp', 'Unknown')
+            # Special handling for device_info results
+            if result_type == 'device_info':
+                device_fields = [
+                    ('Manufacturer', result.get('manufacturer')),
+                    ('Model', result.get('model')),
+                    ('OS Version', result.get('os_version')),
+                    ('IMEI', result.get('imei')),
+                    ('Serial Number', result.get('serial_number')),
+                    ('Phone Number', result.get('phone_number')),
+                    ('Extraction Tool', result.get('extraction_tool')),
+                    ('Case Officer', result.get('case_officer')),
+                    ('Extraction Date', result.get('extraction_date'))
+                ]
                 
-                answer += f"{i}. **{call_type.title()} Call** ({timestamp})\n"
-                answer += f"   {caller} → {receiver} ({duration}s)\n\n"
-            
-            if len(call_results) > 5:
-                answer += f"   ... and {len(call_results) - 5} more calls\n\n"
-        
-        # Show contacts
-        if contact_results:
-            answer += f"**👥 Contacts ({len(contact_results)}):**\n"
-            for i, result in enumerate(contact_results[:5], 1):
-                name = result.get('name', 'Unknown')
-                phones = result.get('phone_numbers', [])
-                emails = result.get('email_addresses', [])
+                for field_name, field_value in device_fields:
+                    if field_value:
+                        answer += f"• {field_name}: {field_value}\n"
+            else:
+                # Show the most relevant fields dynamically for other types
+                relevant_fields = []
+                for key, value in result.items():
+                    if key not in ['type', 'id', 'ufdr_report_id', 'device_info'] and value is not None:
+                        if isinstance(value, (str, int, float)):
+                            relevant_fields.append(f"• {key}: {value}")
+                        elif isinstance(value, list) and len(value) > 0:
+                            relevant_fields.append(f"• {key}: {', '.join(map(str, value[:3]))}")
                 
-                answer += f"{i}. **{name}**\n"
-                if phones:
-                    answer += f"   Phone: {', '.join(phones[:2])}\n"
-                if emails:
-                    answer += f"   Email: {', '.join(emails[:2])}\n"
-                answer += "\n"
-            
-            if len(contact_results) > 5:
-                answer += f"   ... and {len(contact_results) - 5} more contacts\n\n"
-        
-        # Show media files
-        if media_results:
-            answer += f"**📁 Media Files ({len(media_results)}):**\n"
-            for i, result in enumerate(media_results[:5], 1):
-                filename = result.get('filename', 'Unknown')
-                file_type = result.get('file_type', 'unknown')
-                file_size = result.get('file_size', 0)
-                created = result.get('created_date', 'Unknown')
-                
-                # Format file size
-                if file_size:
-                    if file_size > 1024*1024:
-                        size_str = f"{file_size/(1024*1024):.1f}MB"
-                    elif file_size > 1024:
-                        size_str = f"{file_size/1024:.1f}KB"
-                    else:
-                        size_str = f"{file_size}B"
+                if relevant_fields:
+                    answer += "\n".join(relevant_fields[:5]) + "\n"  # Show top 5 fields
                 else:
-                    size_str = "Unknown size"
-                
-                answer += f"{i}. **{filename}** ({file_type})\n"
-                answer += f"   Size: {size_str}, Created: {created}\n\n"
+                    answer += "• No additional details available\n"
             
-            if len(media_results) > 5:
-                answer += f"   ... and {len(media_results) - 5} more files\n\n"
+            answer += "\n"
         
-        # Add helpful suggestions
         if len(all_results) > 10:
-            answer += "💡 **Tip**: Use more specific keywords to narrow down results."
+            answer += f"... and {len(all_results) - 10} more results"
         
         return answer
-        
-        # Show SQL results first (more reliable)
-        if sql_results:
-            report += "\n**Evidence Found in Database:**\n"
-            for i, result in enumerate(sql_results[:5], 1):
-                if result.get('type') == 'chat_record':
-                    content = result.get('content', 'N/A')
-                    app = result.get('app_name', 'Unknown')
-                    sender = result.get('sender', 'Unknown')
-                    receiver = result.get('receiver', 'Unknown')
-                    report += f"{i}. **{app} Message**: {sender} → {receiver}\n"
-                    report += f"   Content: \"{content[:80]}...\"\n"
-                elif result.get('type') == 'call_record':
-                    caller = result.get('caller', 'Unknown')
-                    receiver = result.get('receiver', 'Unknown')
-                    call_type = result.get('call_type', 'Unknown')
-                    duration = result.get('duration', 0)
-                    report += f"{i}. **{call_type.title()} Call**: {caller} → {receiver} ({duration}s)\n"
-                elif result.get('type') == 'contact':
-                    name = result.get('name', 'Unknown')
-                    phones = result.get('phone_numbers', [])
-                    report += f"{i}. **Contact**: {name} - {', '.join(phones[:2])}\n"
-        
-        # Show vector results if available
-        if vector_results:
-            report += "\n**Additional Vector Search Results:**\n"
-            for i, result in enumerate(vector_results[:3], 1):
-                payload = result.get('payload', {})
-                content = payload.get('message_content', payload.get('filename', 'N/A'))
-                score = result.get('score', 0.0)
-                report += f"{i}. {content[:80]}... (Relevance: {score:.2f})\n"
-        
-        # If no results found
-        if not sql_results and not vector_results:
-            report += "\n- No specific evidence found matching the query criteria"
-            report += "\n- This could indicate:"
-            report += "\n  • The query terms don't match available data"
-            report += "\n  • Try more specific search terms"
-            report += "\n  • Use keywords like 'WhatsApp', 'call', 'message', 'contact'"
-        
-        # Add data summary
-        try:
-            from app.models.database import get_db
-            from sqlalchemy import text
-            
-            db = next(get_db())
-            
-            # Get total counts
-            total_chats = db.execute(text("SELECT COUNT(*) FROM chat_records")).scalar()
-            total_calls = db.execute(text("SELECT COUNT(*) FROM call_records")).scalar()
-            total_contacts = db.execute(text("SELECT COUNT(*) FROM contacts")).scalar()
-            total_media = db.execute(text("SELECT COUNT(*) FROM media_files")).scalar()
-            
-            report += f"""
 
-**Database Summary:**
-- Total Chat Records: {total_chats}
-- Total Call Records: {total_calls}
-- Total Contacts: {total_contacts}
-- Total Media Files: {total_media}
+    def render_itemized_answer(self, query: str, results: Dict[str, Any], max_items: int = 50) -> str:
+        """Render dynamic itemized results for 'show/list' style queries without hardcoding fields.
+        - Determines requested types from the query if possible; otherwise displays all types.
+        - Prints up to max_items entries with their most informative primitive fields.
+        """
+        all_items: List[Dict[str, Any]] = results.get('sql_results', []) + results.get('vector_results', [])
+        if not all_items:
+            return "No results found."
 
-**Recommendations:**
-- Try specific queries like: "WhatsApp messages", "outgoing calls", "John Smith"
-- Search for phone numbers: "+1234567890"
-- Look for specific apps: "Telegram", "SMS"
-"""
-            
-            db.close()
-            
-        except Exception as e:
-            print(f"Error getting database summary: {e}")
-            report += f"""
+        ql = (query or '').lower()
+        requested_types = set()
+        if any(w in ql for w in ['call', 'calls', 'call records', 'call_record']):
+            requested_types.add('call_record')
+        if any(w in ql for w in ['chat', 'message', 'messages', 'chats']):
+            requested_types.add('chat_record')
+        if any(w in ql for w in ['contact', 'contacts', 'people', 'persons']):
+            requested_types.add('contact')
+        if any(w in ql for w in ['media', 'file', 'files', 'photos', 'images', 'videos']):
+            requested_types.add('media_file')
 
-**Recommendations:**
-- Try specific queries like: "WhatsApp messages", "outgoing calls", "contacts"
-- Search for phone numbers or contact names
-- Use keywords related to communication data
-"""
-        
-        return report
+        def pick_fields(item: Dict[str, Any]) -> List[str]:
+            # Prefer informative keys; exclude noisy/internal ones
+            exclude = { 'id', 'type', 'score', 'payload', 'ufdr_report_id' }
+            # Keep primitives only
+            kv = [(k, v) for k, v in item.items() if k not in exclude and isinstance(v, (str, int, float, bool)) and v is not None]
+            # Heuristic: prefer keys with these hints first
+            priority = ['timestamp', 'created_date', 'app_name', 'sender', 'receiver', 'caller', 'call_type', 'duration', 'name', 'phone_numbers', 'email_addresses', 'filename', 'file_type', 'file_size']
+            kv.sort(key=lambda t: (0 if t[0] in priority else 1, t[0]))
+            lines = []
+            for k, v in kv[:6]:
+                if isinstance(v, list):
+                    v = ', '.join(map(str, v[:3]))
+                lines.append(f"{k}: {v}")
+            return lines
+
+        filtered = [it for it in all_items if not requested_types or it.get('type') in requested_types]
+        header = f"Found {len(filtered)} result(s)" if requested_types else f"Found {len(filtered)} result(s) across all types"
+        out = [header]
+        for i, item in enumerate(filtered[:max_items], 1):
+            out.append(f"{i}. [{item.get('type','unknown')}] ")
+            for line in pick_fields(item):
+                out.append(f"   - {line}")
+        if len(filtered) > max_items:
+            out.append(f"… and {len(filtered) - max_items} more")
+        return "\n".join(out)
     async def _execute_sql_search(self, query: str, analysis: Dict[str, Any], case_number: Optional[str] = None) -> List[Dict[str, Any]]:
         """Execute intelligent SQL-based search on case-specific PostgreSQL data"""
         try:
@@ -814,6 +758,8 @@ class AIService:
             
             intent = analysis.get("intent", "search")
             target_data = analysis.get("target_data", [])
+            # Normalize query early so it's available to all branches
+            query_lower = (query or "").lower()
             
             print(f"🔍 SQL Search - Intent: {intent}, Target: {target_data}, Case: {case_number}")
             
@@ -886,10 +832,24 @@ class AIService:
                         "count": count,
                         "description": f"Total media files: {count}"
                     })
+                # Combined artifact count if user asked about artifacts
+                if "artifact" in query_lower or "artifacts" in query_lower:
+                    total_count = 0
+                    for dt in ["chat_records", "call_records", "contacts", "media_files"]:
+                        try:
+                            c = db.execute(text(f"SELECT COUNT(*) FROM {schema_name}.{dt}")).scalar() or 0
+                            total_count += c
+                        except Exception:
+                            pass
+                    results.append({
+                        "type": "count_result",
+                        "data_type": "artifacts",
+                        "count": total_count,
+                        "description": f"Total artifacts (all types): {total_count}"
+                    })
             
             # Handle SEARCH queries
             elif intent in ["search", "analyze"]:
-                query_lower = query.lower()
                 
                 # Dynamic chat record search
                 if "chat_records" in target_data:
@@ -987,6 +947,49 @@ class AIService:
                             "created_date": str(row.created_date),
                             "file_path": row.file_path
                         })
+                
+                # Device info search when requested
+                if "device_info" in target_data:
+                    try:
+                        device_rows = db.execute(text(f"""
+                            SELECT id, device_info, extraction_date, investigator, filename
+                            FROM {schema_name}.ufdr_reports
+                            ORDER BY created_at DESC
+                            LIMIT 5
+                        """)).fetchall()
+                        for row in device_rows:
+                            # Parse device_info JSON
+                            device_payload = {}
+                            if row.device_info:
+                                if isinstance(row.device_info, str):
+                                    import json
+                                    try:
+                                        device_payload = json.loads(row.device_info)
+                                    except:
+                                        device_payload = {}
+                                elif isinstance(row.device_info, dict):
+                                    device_payload = row.device_info
+                            
+                            # Create a comprehensive device info result
+                            device_result = {
+                                "type": "device_info",
+                                "id": str(row.id),
+                                "extraction_date": str(row.extraction_date) if getattr(row, 'extraction_date', None) else None,
+                                "investigator": getattr(row, 'investigator', None),
+                                "filename": getattr(row, 'filename', None),
+                                "manufacturer": device_payload.get('manufacturer'),
+                                "model": device_payload.get('model'),
+                                "os_version": device_payload.get('os_version'),
+                                "imei": device_payload.get('imei'),
+                                "serial_number": device_payload.get('serial_number'),
+                                "phone_number": device_payload.get('phone_number'),
+                                "extraction_tool": device_payload.get('extraction_tool'),
+                                "case_officer": device_payload.get('case_officer'),
+                                "device_info": device_payload
+                            }
+                            results.append(device_result)
+                    except Exception as e:
+                        print(f"Device info search error: {e}")
             
             # Handle SHOW ALL queries
             elif intent == "search" and any(word in query.lower() for word in ["show all", "list all", "all"]):
@@ -1036,6 +1039,77 @@ class AIService:
             
         except Exception as e:
             print(f"Error in SQL search: {e}")
+            return []
+    
+    async def _execute_device_info_search(self, case_number: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Execute direct device info search from ufdr_reports table"""
+        try:
+            from app.models.database import get_db
+            from sqlalchemy import text
+            from app.services.case_manager import case_manager
+            
+            db = next(get_db())
+            results = []
+            
+            # Determine schema
+            if case_number:
+                case_info = case_manager.get_case_info(case_number)
+                if case_info:
+                    safe_case_name = case_info["safe_case_name"]
+                    schema_name = f"case_{safe_case_name}"
+                    
+                    # Direct query for device info
+                    device_rows = db.execute(text(f"""
+                        SELECT id, device_info, extraction_date, investigator, filename
+                        FROM {schema_name}.ufdr_reports
+                        ORDER BY created_at DESC
+                        LIMIT 5
+                    """)).fetchall()
+                    
+                    for row in device_rows:
+                        # Parse device_info JSON
+                        device_payload = {}
+                        if row.device_info:
+                            if isinstance(row.device_info, str):
+                                import json
+                                try:
+                                    device_payload = json.loads(row.device_info)
+                                except:
+                                    device_payload = {}
+                            elif isinstance(row.device_info, dict):
+                                device_payload = row.device_info
+                        
+                        # Create a comprehensive device info result
+                        device_result = {
+                            "type": "device_info",
+                            "id": str(row.id),
+                            "extraction_date": str(row.extraction_date) if getattr(row, 'extraction_date', None) else None,
+                            "investigator": getattr(row, 'investigator', None),
+                            "filename": getattr(row, 'filename', None),
+                            "manufacturer": device_payload.get('manufacturer'),
+                            "model": device_payload.get('model'),
+                            "os_version": device_payload.get('os_version'),
+                            "imei": device_payload.get('imei'),
+                            "serial_number": device_payload.get('serial_number'),
+                            "phone_number": device_payload.get('phone_number'),
+                            "extraction_tool": device_payload.get('extraction_tool'),
+                            "case_officer": device_payload.get('case_officer'),
+                            "device_info": device_payload
+                        }
+                        results.append(device_result)
+                else:
+                    print("❌ Case not found for device info search")
+                    return []
+            else:
+                print("❌ No case specified for device info search")
+                return []
+            
+            db.close()
+            print(f"✅ Device info search executed successfully, found {len(results)} results")
+            return results
+            
+        except Exception as e:
+            print(f"❌ Error executing device info search: {e}")
             return []
     
     async def _execute_generated_sql(self, sql_query: str, case_number: Optional[str] = None) -> List[Dict[str, Any]]:

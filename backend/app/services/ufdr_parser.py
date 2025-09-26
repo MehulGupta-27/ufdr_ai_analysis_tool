@@ -1,139 +1,681 @@
 import xml.etree.ElementTree as ET
 import json
-import pandas as pd
-from typing import Dict, List, Any, Optional
-from datetime import datetime
 import re
-import hashlib
+from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
 import os
 import zipfile
 import tempfile
 from pathlib import Path
+import sqlite3
+import pandas as pd
+
 
 class UFDRParser:
     def __init__(self):
-        self.supported_formats = ['.xml', '.json', '.csv', '.xlsx', '.ufdr', '.zip']
-        
+        self.supported_formats = ['.ufdr']
+    
     def parse_ufdr_file(self, file_path: str) -> Dict[str, Any]:
-        """Main method to parse UFDR files based on format"""
+        """Parse .ufdr files in a dynamic way:
+        - If the file is a ZIP archive (typical UFDR), use report.xml + SQLite/CSV/JSON introspection
+        - If the file is a JSON payload (some tools export JSON with .ufdr extension), map it directly
+        """
         file_extension = Path(file_path).suffix.lower()
-        
-        print(f"🔍 Parsing UFDR file: {file_path}")
-        print(f"📄 File extension: {file_extension}")
-        
-        # First, try to read the file content to determine the actual format
+        if file_extension != '.ufdr':
+            raise Exception("Only .ufdr files are supported")
+
+        # Branch 1: Standard ZIP-based UFDR
+        if zipfile.is_zipfile(file_path):
+            print(f"🔍 Parsing UFDR archive (ZIP): {file_path}")
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                report_xml_path = self._find_report_xml(zf)
+                report_root = None
+                if report_xml_path:
+                    report_root = self._read_report_xml(zf, report_xml_path)
+                    path_map = self._build_path_map_from_report(report_root)
+                else:
+                    # Proceed without report.xml for vendor variants
+                    path_map = {}
+                
+                parsed: Dict[str, Any] = {
+                    'device_info': self._extract_device_info_from_report(report_root) if report_root is not None else {},
+                    'chat_records': [],
+                    'call_records': [],
+                    'contacts': [],
+                    'media_files': [],
+                    'metadata': {
+                        'extraction_date': datetime.utcnow(),
+                        'case_info': self._extract_case_info_from_report(report_root) if report_root is not None else {}
+                    }
+                }
+                
+                # Iterate all SQLite databases inside the archive and extract
+                for member in zf.infolist():
+                    if member.is_dir():
+                        continue
+                    lower_name = member.filename.lower()
+                    if lower_name.endswith(('.db', '.sqlite', '.sqlite3')):
+                        try:
+                            with zf.open(member) as dbstream:
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(member.filename).suffix) as tf:
+                                    tf.write(dbstream.read())
+                                    temp_db_path = tf.name
+                            try:
+                                self._extract_from_sqlite(
+                                    temp_db_path,
+                                    member.filename,
+                                    path_map,
+                                    parsed
+                                )
+                            finally:
+                                if os.path.exists(temp_db_path):
+                                    os.unlink(temp_db_path)
+                        except Exception as e:
+                            print(f"⚠️ SQLite extraction error for {member.filename}: {e}")
+                            continue
+                    elif lower_name.endswith('.csv'):
+                        try:
+                            with zf.open(member) as f:
+                                df = pd.read_csv(f)
+                            self._extract_from_dataframe(member.filename, df, parsed)
+                        except Exception as e:
+                            print(f"⚠️ CSV extraction error for {member.filename}: {e}")
+                            continue
+                    elif lower_name.endswith('.json'):
+                        try:
+                            with zf.open(member) as f:
+                                # Try both tabular JSON and structured object JSON
+                                try:
+                                    df = pd.read_json(f)
+                                    self._extract_from_dataframe(member.filename, df, parsed)
+                                except Exception:
+                                    f.seek(0)
+                                    data_obj = json.load(f)
+                                    self._extract_from_json_object(member.filename, data_obj, parsed)
+                        except Exception as e:
+                            print(f"⚠️ JSON extraction error for {member.filename}: {e}")
+                            continue
+                
+                print(
+                    f"✅ UFDR extraction (ZIP): chats={len(parsed['chat_records'])}, calls={len(parsed['call_records'])}, contacts={len(parsed['contacts'])}, media={len(parsed['media_files'])}"
+                )
+                return parsed
+
+        # Branch 2: JSON file with .ufdr extension
+        print(f"🔍 Parsing UFDR JSON payload: {file_path}")
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read(1000)  # Read first 1000 characters
-                print(f"📝 File content preview: {content[:200]}...")
-                
-                # Check if it's JSON
-                if content.strip().startswith('{') or content.strip().startswith('['):
-                    print("🔍 Detected JSON format")
-                    return self._parse_json_ufdr(file_path)
-                # Check if it's XML
-                elif content.strip().startswith('<'):
-                    print("🔍 Detected XML format")
-                    return self._parse_xml_ufdr(file_path)
-                # Check if it's CSV
-                elif ',' in content and '\n' in content:
-                    print("🔍 Detected CSV format")
-                    return self._parse_tabular_ufdr(file_path)
-                    
-        except UnicodeDecodeError:
-            # File might be binary (ZIP, etc.)
-            print("🔍 File appears to be binary, trying archive parsing")
-            pass
+                data = json.load(f)
         except Exception as e:
-            print(f"⚠️ Error reading file: {e}")
-        
-        # Try format-specific parsing based on extension
-        if file_extension in ['.ufdr', '.zip']:
-            return self._parse_ufdr_archive(file_path)
-        elif file_extension == '.xml':
-            return self._parse_xml_ufdr(file_path)
-        elif file_extension == '.json':
-            return self._parse_json_ufdr(file_path)
-        elif file_extension in ['.csv', '.xlsx']:
-            return self._parse_tabular_ufdr(file_path)
-        else:
-            print(f"⚠️ Unsupported file format: {file_extension}, analyzing content dynamically")
-            # Try to read content for dynamic analysis
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                return self._create_dynamic_data_from_content(file_path, content)
-            except:
-                return self._create_dynamic_data_from_content(file_path, None)
-    
-    def _parse_ufdr_archive(self, file_path: str) -> Dict[str, Any]:
-        """Parse UFDR archive files (ZIP format containing XML/JSON data)"""
+            raise Exception(f"Failed to read UFDR JSON: {e}")
+
+        parsed: Dict[str, Any] = {
+            'device_info': data.get('device_info', {}),
+            'chat_records': [],
+            'call_records': [],
+            'contacts': [],
+            'media_files': [],
+            'metadata': data.get('metadata', {'extraction_date': datetime.utcnow()})
+        }
+
+        # First, try direct mapping if keys exist
         try:
-            with zipfile.ZipFile(file_path, 'r') as zip_file:
-                # List all files in the archive
-                file_list = zip_file.namelist()
-                print(f"📁 UFDR archive contains: {file_list}")
-                
-                # Look for main data files
-                main_data_file = None
-                for filename in file_list:
-                    if filename.lower().endswith(('.xml', '.json')):
-                        main_data_file = filename
+            # Chats
+            for chat in data.get('chat_records', []) or []:
+                parsed['chat_records'].append({
+                    'app_name': chat.get('app_name'),
+                    'sender_number': chat.get('sender_number'),
+                    'receiver_number': chat.get('receiver_number'),
+                    'message_content': chat.get('message_content'),
+                    'timestamp': self._coerce_timestamp(chat.get('timestamp')),
+                    'message_type': chat.get('message_type', 'text'),
+                    'is_deleted': bool(chat.get('is_deleted', False)),
+                    'metadata': chat.get('metadata', {})
+                })
+            # Calls
+            for call in data.get('call_records', []) or []:
+                parsed['call_records'].append({
+                    'caller_number': call.get('caller_number'),
+                    'receiver_number': call.get('receiver_number'),
+                    'call_type': call.get('call_type', 'unknown'),
+                    'duration': int(call.get('duration', 0)) if call.get('duration') is not None else 0,
+                    'timestamp': self._coerce_timestamp(call.get('timestamp')),
+                    'metadata': call.get('metadata', {})
+                })
+            # Contacts
+            for contact in data.get('contacts', []) or []:
+                parsed['contacts'].append({
+                    'name': contact.get('name'),
+                    'phone_numbers': contact.get('phone_numbers', []) or [],
+                    'email_addresses': contact.get('email_addresses', []) or [],
+                    'metadata': contact.get('metadata', {})
+                })
+            # Media
+            for media in data.get('media_files', []) or []:
+                parsed['media_files'].append({
+                    'filename': media.get('filename'),
+                    'file_path': media.get('file_path'),
+                    'file_type': media.get('file_type'),
+                    'file_size': int(media.get('file_size', 0)) if media.get('file_size') is not None else 0,
+                    'created_date': self._coerce_timestamp(media.get('created_date')),
+                    'modified_date': self._coerce_timestamp(media.get('modified_date')),
+                    'hash_md5': media.get('hash_md5'),
+                    'hash_sha256': media.get('hash_sha256'),
+                    'metadata': media.get('metadata', {})
+                })
+        except Exception:
+            pass
+
+        # Then, recursively traverse to capture any vendor-specific nesting
+        self._traverse_and_extract(data, parsed)
+
+        print(
+            f"✅ UFDR extraction (JSON): chats={len(parsed['chat_records'])}, calls={len(parsed['call_records'])}, contacts={len(parsed['contacts'])}, media={len(parsed['media_files'])}"
+        )
+        return parsed
+    
+    def _find_report_xml(self, zf: zipfile.ZipFile) -> Optional[str]:
+        for name in zf.namelist():
+            lower = name.lower()
+            if lower.endswith('.xml') and 'report' in lower:
+                return name
+        # Fallback: any xml
+        for name in zf.namelist():
+            if name.lower().endswith('.xml'):
+                return name
+        return None
+
+    def _read_report_xml(self, zf: zipfile.ZipFile, xml_path: str) -> ET.Element:
+        with zf.open(xml_path) as f:
+            content = f.read().decode('utf-8', errors='ignore')
+        return ET.fromstring(content)
+
+    def _build_path_map_from_report(self, root: ET.Element) -> Dict[str, Dict[str, Any]]:
+        """Build mapping of categorized items back to their local/original paths from report.xml.
+        Returns dict indexed by any available identifier/path with metadata.
+        """
+        path_map: Dict[str, Dict[str, Any]] = {}
+        for file_elem in root.findall('.//file'):
+            info: Dict[str, Any] = {}
+            # capture attributes
+            for attr in ['id', 'name', 'path', 'size', 'type']:
+                val = file_elem.get(attr)
+                if val is not None:
+                    info[attr] = val
+            # capture metadata local path and section
+            metadata_section = file_elem.find('.//metadata')
+            if metadata_section is not None:
+                local_path = None
+                section = metadata_section.get('section')
+                for item in metadata_section.findall('.//item'):
+                    if item.get('name') == 'Local Path':
+                        local_path = item.text
                         break
-                
-                if main_data_file:
-                    # Check if this is a forensic report XML (contains metadata about other files)
-                    if main_data_file.lower().endswith('.xml') and ('report' in main_data_file.lower() or len(file_list) > 5):
-                        # This looks like a forensic report with multiple files - use XML-based archive parser
-                        print(f"🔍 Found forensic report XML: {main_data_file}")
-                        return self._parse_xml_based_ufdr_archive(zip_file, file_path)
-                    else:
-                        # Extract and parse the main data file as standalone
-                        with zip_file.open(main_data_file) as data_file:
-                            content = data_file.read()
-                            
-                            # Create temporary file to parse
-                            with tempfile.NamedTemporaryFile(mode='wb', suffix=Path(main_data_file).suffix, delete=False) as temp_file:
-                                temp_file.write(content)
-                                temp_file_path = temp_file.name
-                            
-                            try:
-                                if main_data_file.lower().endswith('.xml'):
-                                    return self._parse_xml_ufdr(temp_file_path)
-                                elif main_data_file.lower().endswith('.json'):
-                                    return self._parse_json_ufdr(temp_file_path)
-                            finally:
-                                # Clean up temporary file
-                                if os.path.exists(temp_file_path):
-                                    os.unlink(temp_file_path)
+                if section:
+                    info['section'] = section
+                if local_path:
+                    info['local_path'] = local_path
+                    path_map[local_path] = info
+            # fallback index by file path if present
+            if 'path' in info:
+                path_map.setdefault(info['path'], info)
+        return path_map
+
+    def _extract_device_info_from_report(self, root: ET.Element) -> Dict[str, Any]:
+        device_info: Dict[str, Any] = {}
+        device_elem = root.find('.//device_info') or root.find('.//device') or root.find('.//Device')
+        if device_elem is not None:
+            for tag in ['make', 'model', 'imei', 'android_version', 'build_number', 'os_version', 'manufacturer']:
+                val = device_elem.findtext(tag)
+                if val:
+                    # normalize keys
+                    key = 'manufacturer' if tag in ['make', 'manufacturer'] else tag
+                    device_info[key] = val
+        return device_info
+
+    def _extract_case_info_from_report(self, root: ET.Element) -> Dict[str, Any]:
+        case_info: Dict[str, Any] = {}
+        case_elem = root.find('.//case_info') or root.find('.//case') or root.find('.//Case')
+        if case_elem is not None:
+            for tag in ['case_number', 'examiner', 'description', 'extraction_date', 'number', 'investigator']:
+                val = case_elem.findtext(tag)
+                if val:
+                    key = 'case_number' if tag == 'number' else tag
+                    case_info[key] = val
+        return case_info
+
+    def _extract_from_sqlite(
+        self,
+        db_path: str,
+        archive_member_path: str,
+        path_map: Dict[str, Dict[str, Any]],
+        parsed: Dict[str, Any]
+    ) -> None:
+        """Open SQLite, introspect tables/columns, and extract records into parsed structure."""
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            cursor = conn.cursor()
+            tables = [row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            schema: Dict[str, List[str]] = {}
+            for t in tables:
+                cols = [r[1] for r in cursor.execute(f"PRAGMA table_info('{t}')")]
+                schema[t] = cols
+            
+            # Extract chats (WhatsApp/SMS-like)
+            self._extract_chats(cursor, schema, parsed)
+            # Extract calls
+            self._extract_calls(cursor, schema, parsed)
+            # Extract contacts
+            self._extract_contacts(cursor, schema, parsed)
+            # Extract media metadata (if present in DB)
+            self._extract_media(cursor, schema, parsed)
+        finally:
+            conn.close()
+
+    def _has_columns(self, cols: List[str], required: List[str]) -> bool:
+        cols_lower = set(c.lower() for c in cols)
+        return all(req.lower() in cols_lower for req in required)
+
+    def _extract_chats(self, cursor: sqlite3.Cursor, schema: Dict[str, List[str]], parsed: Dict[str, Any]) -> None:
+        """Schema-driven chat extraction without regex, no hardcoded app assumptions.
+        Heuristics are based on column presence and types.
+        """
+        for t, cols in schema.items():
+            try:
+                lower_cols = [c.lower() for c in cols]
+                # Candidate text columns
+                text_candidates = [c for c in lower_cols if any(k in c for k in ['data', 'message', 'body', 'text', 'content'])]
+                # Candidate sender/receiver columns
+                sender_candidates = [c for c in lower_cols if any(k in c for k in ['sender', 'from', 'author', 'address', 'src', 'caller'])]
+                receiver_candidates = [c for c in lower_cols if any(k in c for k in ['receiver', 'to', 'dest', 'remote', 'chat', 'recipient', 'callee'])]
+                # Candidate timestamp columns
+                ts_candidates = [c for c in lower_cols if any(k in c for k in ['time', 'date', 'timestamp'])]
+                if not text_candidates:
+                    continue
+                # Build select columns dynamically
+                select_cols: List[str] = []
+                sel_sender = sender_candidates[0] if sender_candidates else None
+                sel_receiver = receiver_candidates[0] if receiver_candidates else None
+                sel_text = text_candidates[0]
+                sel_ts = ts_candidates[0] if ts_candidates else None
+                if sel_sender:
+                    select_cols.append(sel_sender)
+                if sel_receiver:
+                    select_cols.append(sel_receiver)
+                select_cols.append(sel_text)
+                if sel_ts:
+                    select_cols.append(sel_ts)
+                query = f"SELECT {', '.join(select_cols)} FROM {t}"
+                for row in cursor.execute(query):
+                    idx = 0
+                    sender = row[idx] if sel_sender else None
+                    if sel_sender:
+                        idx += 1
+                    receiver = row[idx] if sel_receiver else None
+                    if sel_receiver:
+                        idx += 1
+                    content = row[idx]
+                    idx += 1
+                    timestamp = row[idx] if sel_ts else None
+                    parsed['chat_records'].append({
+                        'app_name': 'Chat',
+                        'sender_number': sender,
+                        'receiver_number': receiver,
+                        'message_content': content,
+                        'timestamp': self._coerce_timestamp(timestamp),
+                        'message_type': 'text',
+                        'is_deleted': False,
+                        'metadata': {'source_table': t}
+                    })
+            except Exception as e:
+                # Skip tables that are not message-like
+                continue
+
+    def _extract_calls(self, cursor: sqlite3.Cursor, schema: Dict[str, List[str]], parsed: Dict[str, Any]) -> None:
+        call_tables = [
+            (t, cols) for t, cols in schema.items() if self._has_columns(cols, ['number', 'type', 'duration']) or self._has_columns(cols, ['caller', 'receiver', 'duration'])
+        ]
+        for t, cols in call_tables:
+            try:
+                colset = set(c.lower() for c in cols)
+                if {'caller', 'receiver', 'duration'} <= colset:
+                    query = f"SELECT caller, receiver, duration, type, date FROM {t}"
                 else:
-                    # Check for XML report file
-                    xml_files = [f for f in file_list if f.lower().endswith('.xml')]
-                    if xml_files:
-                        print(f"🔍 Found XML report file: {xml_files[0]}")
-                        return self._parse_xml_based_ufdr_archive(zip_file, file_path)
-                    else:
-                        # Parse text-based forensic data from archive
-                        print("🔍 No structured data files found, parsing text-based forensic data...")
-                        return self._parse_text_based_ufdr_archive(zip_file, file_path)
-                    
-        except zipfile.BadZipFile:
-            # If it's not a valid ZIP file, try to parse as regular file
+                    # Android calls: number, type, duration, date
+                    query = f"SELECT number, number, duration, type, date FROM {t}"
+                for a, b, duration, call_type, date_val in cursor.execute(query):
+                    parsed['call_records'].append({
+                        'caller_number': a,
+                        'receiver_number': b,
+                        'call_type': str(call_type) if call_type is not None else 'unknown',
+                        'duration': int(duration) if duration is not None else 0,
+                        'timestamp': self._coerce_timestamp(date_val),
+                        'metadata': {'source_table': t}
+                    })
+            except Exception as e:
+                print(f"⚠️ Call extraction error from {t}: {e}")
+
+    def _extract_contacts(self, cursor: sqlite3.Cursor, schema: Dict[str, List[str]], parsed: Dict[str, Any]) -> None:
+        for t, cols in schema.items():
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                return self._create_dynamic_data_from_content(file_path, content)
-            except:
-                return self._create_dynamic_data_from_content(file_path, None)
+                lower_cols = [c.lower() for c in cols]
+                name_cols = [c for c in lower_cols if any(k in c for k in ['display_name', 'name', 'given_name'])]
+                phone_cols = [c for c in lower_cols if any(k in c for k in ['phone', 'number', 'msisdn'])]
+                email_cols = [c for c in lower_cols if 'email' in c]
+                if not name_cols:
+                    continue
+                select_cols = [name_cols[0]]
+                if phone_cols:
+                    select_cols.append(phone_cols[0])
+                if email_cols:
+                    select_cols.append(email_cols[0])
+                query = f"SELECT {', '.join(select_cols)} FROM {t}"
+                for row in cursor.execute(query):
+                    idx = 0
+                    name = row[idx]
+                    idx += 1
+                    phone_numbers: List[str] = []
+                    email_addresses: List[str] = []
+                    if phone_cols:
+                        val = row[idx]
+                        idx += 1
+                        if val is not None and str(val).strip() != '':
+                            phone_numbers = [str(val)]
+                    if email_cols:
+                        val = row[idx]
+                        if val is not None and str(val).strip() != '':
+                            email_addresses = [str(val)]
+                    parsed['contacts'].append({
+                        'name': name,
+                        'phone_numbers': phone_numbers,
+                        'email_addresses': email_addresses,
+                        'metadata': {'source_table': t}
+                    })
+            except Exception:
+                continue
+
+    def _extract_media(self, cursor: sqlite3.Cursor, schema: Dict[str, List[str]], parsed: Dict[str, Any]) -> None:
+        for t, cols in schema.items():
+            try:
+                lower_cols = [c.lower() for c in cols]
+                filename_col = None
+                path_col = None
+                mime_col = None
+                size_col = None
+                created_col = None
+                modified_col = None
+                for c in lower_cols:
+                    if filename_col is None and any(k in c for k in ['filename', 'name']):
+                        filename_col = c
+                    if path_col is None and any(k in c for k in ['_data', 'path', 'file_path', 'local_path']):
+                        path_col = c
+                    if mime_col is None and any(k in c for k in ['mime', 'file_type', 'type']):
+                        mime_col = c
+                    if size_col is None and 'size' in c:
+                        size_col = c
+                    if created_col is None and any(k in c for k in ['date_added', 'created']):
+                        created_col = c
+                    if modified_col is None and any(k in c for k in ['date_modified', 'modified']):
+                        modified_col = c
+                select_cols = [c for c in [path_col or filename_col, mime_col, size_col, created_col, modified_col] if c]
+                if not select_cols:
+                    continue
+                query = f"SELECT {', '.join(select_cols)} FROM {t}"
+                for row in cursor.execute(query):
+                    idx = 0
+                    path_or_name = row[idx]; idx += 1 if (path_col or filename_col) else 0
+                    mime = row[idx] if mime_col else None; idx += 1 if mime_col else 0
+                    size = row[idx] if size_col else None; idx += 1 if size_col else 0
+                    created = row[idx] if created_col else None; idx += 1 if created_col else 0
+                    modified = row[idx] if modified_col else None
+                    filename = Path(path_or_name).name if path_col and path_or_name else (path_or_name if filename_col else None)
+                    parsed['media_files'].append({
+                        'filename': filename,
+                        'file_path': path_or_name if path_col else None,
+                        'file_type': mime,
+                        'file_size': int(size) if size is not None else 0,
+                        'created_date': self._coerce_timestamp(created),
+                        'modified_date': self._coerce_timestamp(modified),
+                        'hash_md5': None,
+                        'hash_sha256': None,
+                        'metadata': {'source_table': t}
+                    })
+            except Exception:
+                continue
+
+    def _extract_from_dataframe(self, table_name: str, df: pd.DataFrame, parsed: Dict[str, Any]) -> None:
+        """Generic extraction from tabular files (CSV/JSON) using column-based heuristics only."""
+        try:
+            lower_cols = [c.lower() for c in df.columns]
+            # Contacts
+            if any(k in lower_cols for k in ['name', 'display_name']):
+                name_col = next((c for c in lower_cols if c in ['display_name', 'name']), None)
+                phone_col = next((c for c in lower_cols if 'phone' in c or 'number' in c or 'msisdn' in c), None)
+                email_col = next((c for c in lower_cols if 'email' in c), None)
+                if name_col:
+                    for _, row in df.iterrows():
+                        name = row.get(name_col)
+                        phones = [str(row.get(phone_col))] if phone_col and pd.notna(row.get(phone_col)) else []
+                        emails = [str(row.get(email_col))] if email_col and pd.notna(row.get(email_col)) else []
+                        if pd.notna(name) or phones or emails:
+                            parsed['contacts'].append({
+                                'name': str(name) if pd.notna(name) else 'Unknown',
+                                'phone_numbers': phones,
+                                'email_addresses': emails,
+                                'metadata': {'source_table': table_name}
+                            })
+            # Calls
+            if any(k in lower_cols for k in ['duration']) and (any(k in lower_cols for k in ['caller']) or any(k in lower_cols for k in ['number'])):
+                caller_col = next((c for c in lower_cols if 'caller' in c or (c == 'number')), None)
+                receiver_col = next((c for c in lower_cols if 'receiver' in c or 'to' in c or 'callee' in c), None)
+                duration_col = next((c for c in lower_cols if 'duration' in c), None)
+                type_col = next((c for c in lower_cols if 'type' in c or 'call_type' in c), None)
+                ts_col = next((c for c in lower_cols if 'date' in c or 'time' in c or 'timestamp' in c), None)
+                if duration_col and caller_col:
+                    for _, row in df.iterrows():
+                        parsed['call_records'].append({
+                            'caller_number': str(row.get(caller_col)) if pd.notna(row.get(caller_col)) else None,
+                            'receiver_number': str(row.get(receiver_col)) if receiver_col and pd.notna(row.get(receiver_col)) else None,
+                            'call_type': str(row.get(type_col)) if type_col and pd.notna(row.get(type_col)) else 'unknown',
+                            'duration': int(row.get(duration_col)) if pd.notna(row.get(duration_col)) else 0,
+                            'timestamp': self._coerce_timestamp(row.get(ts_col)) if ts_col else None,
+                            'metadata': {'source_table': table_name}
+                        })
+            # Chats
+            text_col = next((c for c in lower_cols if c in ['message', 'body', 'text', 'content', 'data']), None)
+            if text_col:
+                sender_col = next((c for c in lower_cols if c in ['sender', 'from', 'author', 'address']), None)
+                receiver_col = next((c for c in lower_cols if c in ['receiver', 'to', 'recipient']), None)
+                ts_col = next((c for c in lower_cols if c in ['timestamp', 'date', 'time']), None)
+                for _, row in df.iterrows():
+                    content = row.get(text_col)
+                    if pd.notna(content) and str(content).strip() != '':
+                        parsed['chat_records'].append({
+                            'app_name': None,
+                            'sender_number': str(row.get(sender_col)) if sender_col and pd.notna(row.get(sender_col)) else None,
+                            'receiver_number': str(row.get(receiver_col)) if receiver_col and pd.notna(row.get(receiver_col)) else None,
+                            'message_content': str(content),
+                            'timestamp': self._coerce_timestamp(row.get(ts_col)) if ts_col else None,
+                            'message_type': 'text',
+                            'is_deleted': False,
+                            'metadata': {'source_table': table_name}
+                        })
         except Exception as e:
-            print(f"⚠️  Error parsing UFDR archive: {str(e)}")
-            # Fallback to dynamic content analysis
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                return self._create_dynamic_data_from_content(file_path, content)
-            except:
-                return self._create_dynamic_data_from_content(file_path, None)
+            print(f"⚠️ DataFrame extraction error for {table_name}: {e}")
+
+    def _extract_from_json_object(self, name: str, obj: Any, parsed: Dict[str, Any]) -> None:
+        """Map structured JSON objects to standard buckets in a schema-agnostic way."""
+        try:
+            if not isinstance(obj, dict):
+                return
+            if 'device_info' in obj and isinstance(obj['device_info'], dict):
+                parsed['device_info'].update(obj['device_info'])
+            mapping = [
+                ('chat_records', 'chat_records'),
+                ('messages', 'chat_records'),
+                ('calls', 'call_records'),
+                ('call_records', 'call_records'),
+                ('contacts', 'contacts'),
+                ('media', 'media_files'),
+                ('media_files', 'media_files')
+            ]
+            for src_key, target in mapping:
+                arr = obj.get(src_key)
+                if isinstance(arr, list):
+                    for item in arr:
+                        if not isinstance(item, dict):
+                            continue
+                        if target == 'chat_records':
+                            parsed['chat_records'].append({
+                                'app_name': item.get('app_name'),
+                                'sender_number': item.get('sender') or item.get('sender_number'),
+                                'receiver_number': item.get('receiver') or item.get('receiver_number'),
+                                'message_content': item.get('message') or item.get('message_content'),
+                                'timestamp': self._coerce_timestamp(item.get('timestamp')),
+                                'message_type': item.get('message_type', 'text'),
+                                'is_deleted': bool(item.get('is_deleted', False)),
+                                'metadata': item.get('metadata', {})
+                            })
+                        elif target == 'call_records':
+                            parsed['call_records'].append({
+                                'caller_number': item.get('caller') or item.get('caller_number'),
+                                'receiver_number': item.get('receiver') or item.get('receiver_number'),
+                                'call_type': item.get('type') or item.get('call_type', 'unknown'),
+                                'duration': int(item.get('duration', 0)) if item.get('duration') is not None else 0,
+                                'timestamp': self._coerce_timestamp(item.get('timestamp')),
+                                'metadata': item.get('metadata', {})
+                            })
+                        elif target == 'contacts':
+                            phones = item.get('phone_numbers')
+                            if not phones and item.get('phone') is not None:
+                                phones = [str(item.get('phone'))]
+                            emails = item.get('email_addresses')
+                            if not emails and item.get('email') is not None:
+                                emails = [str(item.get('email'))]
+                            parsed['contacts'].append({
+                                'name': item.get('name'),
+                                'phone_numbers': phones or [],
+                                'email_addresses': emails or [],
+                                'metadata': item.get('metadata', {})
+                            })
+                        elif target == 'media_files':
+                            parsed['media_files'].append({
+                                'filename': item.get('filename'),
+                                'file_path': item.get('file_path') or item.get('path'),
+                                'file_type': item.get('file_type') or item.get('mime'),
+                                'file_size': int(item.get('file_size', 0)) if item.get('file_size') is not None else 0,
+                                'created_date': self._coerce_timestamp(item.get('created_date')),
+                                'modified_date': self._coerce_timestamp(item.get('modified_date')),
+                                'hash_md5': item.get('hash_md5'),
+                                'hash_sha256': item.get('hash_sha256'),
+                                'metadata': item.get('metadata', {})
+                            })
+        except Exception:
+            pass
+
+    def _traverse_and_extract(self, obj: Any, parsed: Dict[str, Any]) -> None:
+        """Recursively traverse arbitrary JSON and classify records dynamically.
+        This is schema-agnostic and avoids vendor-specific hardcoding.
+        """
+        try:
+            if isinstance(obj, list):
+                for item in obj:
+                    self._traverse_and_extract(item, parsed)
+                return
+            if not isinstance(obj, dict):
+                return
+            lower_keys = set(k.lower() for k in obj.keys())
+            # Detect chat-like
+            if any(k in lower_keys for k in ['message', 'message_content', 'text', 'body', 'content']):
+                parsed['chat_records'].append({
+                    'app_name': obj.get('app_name'),
+                    'sender_number': obj.get('sender') or obj.get('sender_number') or obj.get('from') or obj.get('author'),
+                    'receiver_number': obj.get('receiver') or obj.get('receiver_number') or obj.get('to') or obj.get('recipient'),
+                    'message_content': obj.get('message') or obj.get('message_content') or obj.get('text') or obj.get('body') or obj.get('content'),
+                    'timestamp': self._coerce_timestamp(obj.get('timestamp') or obj.get('date') or obj.get('time')),
+                    'message_type': obj.get('message_type', 'text'),
+                    'is_deleted': bool(obj.get('is_deleted', False)),
+                    'metadata': obj.get('metadata', {})
+                })
+                # Also traverse children for nested records
+                for v in obj.values():
+                    self._traverse_and_extract(v, parsed)
+                return
+            # Detect call-like
+            if ('duration' in lower_keys) and (any(k in lower_keys for k in ['caller', 'caller_number', 'number']) or any(k in lower_keys for k in ['receiver', 'receiver_number', 'callee'])):
+                parsed['call_records'].append({
+                    'caller_number': obj.get('caller') or obj.get('caller_number') or obj.get('number'),
+                    'receiver_number': obj.get('receiver') or obj.get('receiver_number') or obj.get('callee'),
+                    'call_type': obj.get('type') or obj.get('call_type', 'unknown'),
+                    'duration': int(obj.get('duration', 0)) if obj.get('duration') is not None else 0,
+                    'timestamp': self._coerce_timestamp(obj.get('timestamp') or obj.get('date') or obj.get('time')),
+                    'metadata': obj.get('metadata', {})
+                })
+                for v in obj.values():
+                    self._traverse_and_extract(v, parsed)
+                return
+            # Detect contact-like
+            if any(k in lower_keys for k in ['name', 'display_name']) and (any('phone' in k for k in lower_keys) or any('email' in k for k in lower_keys)):
+                phones = obj.get('phone_numbers')
+                if not phones:
+                    for k, v in obj.items():
+                        if isinstance(v, (str, int)) and 'phone' in k.lower():
+                            phones = [str(v)]
+                            break
+                emails = obj.get('email_addresses')
+                if not emails:
+                    for k, v in obj.items():
+                        if isinstance(v, (str, int)) and 'email' in k.lower():
+                            emails = [str(v)]
+                            break
+                parsed['contacts'].append({
+                    'name': obj.get('name') or obj.get('display_name'),
+                    'phone_numbers': phones or [],
+                    'email_addresses': emails or [],
+                    'metadata': obj.get('metadata', {})
+                })
+                for v in obj.values():
+                    self._traverse_and_extract(v, parsed)
+                return
+            # Detect media-like
+            if any(k in lower_keys for k in ['filename']) or (any(k in lower_keys for k in ['path', 'file_path', '_data']) and any(k in lower_keys for k in ['mime', 'file_type', 'type'])):
+                parsed['media_files'].append({
+                    'filename': obj.get('filename') or (Path(obj.get('path') or obj.get('file_path') or '').name if (obj.get('path') or obj.get('file_path')) else None),
+                    'file_path': obj.get('file_path') or obj.get('path'),
+                    'file_type': obj.get('file_type') or obj.get('mime') or obj.get('type'),
+                    'file_size': int(obj.get('file_size', 0)) if obj.get('file_size') is not None else 0,
+                    'created_date': self._coerce_timestamp(obj.get('created_date') or obj.get('date_added')),
+                    'modified_date': self._coerce_timestamp(obj.get('modified') or obj.get('modified_date') or obj.get('date_modified')),
+                    'hash_md5': obj.get('hash_md5'),
+                    'hash_sha256': obj.get('hash_sha256'),
+                    'metadata': obj.get('metadata', {})
+                })
+                for v in obj.values():
+                    self._traverse_and_extract(v, parsed)
+                return
+            # Continue traversal if no classification
+            for v in obj.values():
+                self._traverse_and_extract(v, parsed)
+        except Exception:
+            pass
+
+    def _coerce_timestamp(self, value: Any) -> Optional[datetime]:
+        try:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                # Handle common Android epoch in milliseconds
+                if value > 1e12:
+                    return datetime.fromtimestamp(value / 1000.0)
+                return datetime.fromtimestamp(value)
+            if isinstance(value, str) and value.isdigit():
+                iv = int(value)
+                if iv > 1e12:
+                    return datetime.fromtimestamp(iv / 1000.0)
+                return datetime.fromtimestamp(iv)
+            return None
+        except Exception:
+            return None
     
     def _parse_text_based_ufdr_archive(self, zip_file: zipfile.ZipFile, file_path: str) -> Dict[str, Any]:
         """Parse text-based forensic data from UFDR archive"""

@@ -40,6 +40,16 @@ class UFDRReportGenerator:
         report_content = await self._generate_llm_report(case_data, analysis_results)
         
         # Step 4: Structure the final report
+        # Build dynamic statistics expected by frontend (no hardcoding of values)
+        total_chats = len(case_data.get('chat_records', []))
+        total_calls = len(case_data.get('call_records', []))
+        total_contacts = len(case_data.get('contacts', []))
+        total_media = len(case_data.get('media_files', []))
+        suspicious_activities = (
+            sum(1 for c in case_data.get('chat_records', []) if c.get('is_deleted'))
+            + sum(1 for c in case_data.get('call_records', []) if (c.get('duration') or 0) == 0)
+        )
+
         final_report = {
             "success": True,
             "case_number": case_number,
@@ -47,11 +57,19 @@ class UFDRReportGenerator:
             "report_content": report_content,
             "raw_data": case_data,
             "analysis_results": analysis_results,
+            # New: statistics block consumed by frontend summary tiles
+            "statistics": {
+                "total_contacts": total_contacts,
+                "total_messages": total_chats,
+                "total_calls": total_calls,
+                "total_media_files": total_media,
+                "suspicious_activities": suspicious_activities
+            },
             "metadata": {
-                "total_chat_records": len(case_data.get('chat_records', [])),
-                "total_call_records": len(case_data.get('call_records', [])),
-                "total_contacts": len(case_data.get('contacts', [])),
-                "total_media_files": len(case_data.get('media_files', [])),
+                "total_chat_records": total_chats,
+                "total_call_records": total_calls,
+                "total_contacts": total_contacts,
+                "total_media_files": total_media,
                 "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
         }
@@ -72,19 +90,31 @@ class UFDRReportGenerator:
         }
         
         try:
+            from app.services.case_manager import case_manager
+            
+            # Get case info to determine schema
+            case_info = case_manager.get_case_info(case_number)
+            if not case_info:
+                print(f"❌ Case {case_number} not found in case manager")
+                return case_data
+            
+            safe_case_name = case_info["safe_case_name"]
+            schema_name = f"case_{safe_case_name}"
+            print(f"🔍 Gathering data from schema: {schema_name}")
+            
             db = next(get_db())
             
-            # Get UFDR reports for this case
-            ufdr_query = text("""
+            # Get UFDR reports for this case from case-specific schema
+            ufdr_query = text(f"""
                 SELECT id, filename, device_info, extraction_date, investigator, processed
-                FROM ufdr_reports 
+                FROM {schema_name}.ufdr_reports 
                 WHERE case_number = :case_number
             """)
             ufdr_results = db.execute(ufdr_query, {"case_number": case_number}).fetchall()
             
             if not ufdr_results:
-                # Try to get any available data (for demo purposes)
-                ufdr_results = db.execute(text("SELECT id, filename, device_info, extraction_date, investigator, processed FROM ufdr_reports LIMIT 1")).fetchall()
+                print(f"⚠️ No UFDR reports found for case {case_number} in schema {schema_name}")
+                return case_data
             
             for ufdr in ufdr_results:
                 case_data["ufdr_reports"].append({
@@ -98,11 +128,11 @@ class UFDRReportGenerator:
                 
                 ufdr_id = ufdr.id
                 
-                # Get chat records
-                chat_query = text("""
+                # Get chat records from case-specific schema
+                chat_query = text(f"""
                     SELECT app_name, sender_number, receiver_number, message_content, 
                            timestamp, message_type, is_deleted, metadata
-                    FROM chat_records 
+                    FROM {schema_name}.chat_records 
                     WHERE ufdr_report_id = :ufdr_id
                     ORDER BY timestamp DESC
                 """)
@@ -120,10 +150,10 @@ class UFDRReportGenerator:
                         "metadata": chat.metadata
                     })
                 
-                # Get call records
-                call_query = text("""
+                # Get call records from case-specific schema
+                call_query = text(f"""
                     SELECT caller_number, receiver_number, call_type, duration, timestamp, metadata
-                    FROM call_records 
+                    FROM {schema_name}.call_records 
                     WHERE ufdr_report_id = :ufdr_id
                     ORDER BY timestamp DESC
                 """)
@@ -139,10 +169,10 @@ class UFDRReportGenerator:
                         "metadata": call.metadata
                     })
                 
-                # Get contacts
-                contact_query = text("""
+                # Get contacts from case-specific schema
+                contact_query = text(f"""
                     SELECT name, phone_numbers, email_addresses, metadata
-                    FROM contacts 
+                    FROM {schema_name}.contacts 
                     WHERE ufdr_report_id = :ufdr_id
                 """)
                 contact_results = db.execute(contact_query, {"ufdr_id": ufdr_id}).fetchall()
@@ -155,11 +185,11 @@ class UFDRReportGenerator:
                         "metadata": contact.metadata
                     })
                 
-                # Get media files
-                media_query = text("""
+                # Get media files from case-specific schema
+                media_query = text(f"""
                     SELECT filename, file_path, file_type, file_size, created_date, 
                            modified_date, hash_md5, hash_sha256, metadata
-                    FROM media_files 
+                    FROM {schema_name}.media_files 
                     WHERE ufdr_report_id = :ufdr_id
                 """)
                 media_results = db.execute(media_query, {"ufdr_id": ufdr_id}).fetchall()

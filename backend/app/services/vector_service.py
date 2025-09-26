@@ -7,10 +7,10 @@ import asyncio
 from typing import Dict, List, Any, Optional, Tuple
 from uuid import uuid4
 import numpy as np
-from openai import AzureOpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 from config.settings import settings
+from fastembed import TextEmbedding
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,9 @@ class VectorService:
     def __init__(self):
         """Initialize vector service."""
         self.qdrant_client = None
-        self.openai_client = None
+        self.embedder: Optional[TextEmbedding] = None
         self.collection_name = "forensic_data"
+        self._embedding_dimension: Optional[int] = None
         self._initialize_clients()
     
     def _initialize_clients(self):
@@ -41,17 +42,19 @@ class VectorService:
             else:
                 logger.warning(f"❌ Qdrant configuration missing - URL: {bool(settings.qdrant_url)}, API Key: {bool(settings.qdrant_api_key)}")
             
-            # Initialize Azure OpenAI client
-            if settings.embeddings_azure_endpoint and settings.embeddings_api_key:
-                logger.info(f"Initializing Azure OpenAI client with endpoint: {settings.embeddings_azure_endpoint}")
-                self.openai_client = AzureOpenAI(
-                    azure_endpoint=settings.embeddings_azure_endpoint,
-                    api_key=settings.embeddings_api_key,
-                    api_version=settings.api_version
-                )
-                logger.info("✅ Connected to Azure OpenAI for embeddings")
-            else:
-                logger.warning(f"❌ Azure OpenAI configuration missing - Endpoint: {bool(settings.embeddings_azure_endpoint)}, API Key: {bool(settings.embeddings_api_key)}")
+            # Initialize local embedder
+            try:
+                self.embedder = TextEmbedding(model_name=settings.embedding_model_name)
+                logger.info(f"✅ Local embedder ready: {settings.embedding_model_name}")
+                # Detect and cache the embedding dimension dynamically
+                try:
+                    self._embedding_dimension = self._determine_embedding_dimension()
+                    if self._embedding_dimension:
+                        logger.info(f"🔎 Detected embedding dimension: {self._embedding_dimension}")
+                except Exception as dim_err:
+                    logger.warning(f"Unable to detect embedding dimension: {dim_err}")
+            except Exception as e:
+                logger.error(f"❌ Failed to init local embedder: {e}")
         except Exception as e:
             logger.error(f"❌ Error initializing vector service clients: {e}")
             import traceback
@@ -63,18 +66,33 @@ class VectorService:
     # Removed: initialize_collection() - Collections are now created dynamically per case only
     # This eliminates the generic 'forensic_data' collection
     
+    def _determine_embedding_dimension(self) -> Optional[int]:
+        """Determine embedding dimension locally from the embedder."""
+        if not self.embedder:
+            return None
+        vectors = list(self.embedder.embed(["dimension_check"]))
+        if not vectors:
+            return None
+        return len(vectors[0])
+
+    def get_embedding_dimension(self) -> Optional[int]:
+        """Return cached embedding dimension, or detect it if unknown."""
+        if self._embedding_dimension is None:
+            try:
+                self._embedding_dimension = self._determine_embedding_dimension()
+            except Exception:
+                self._embedding_dimension = None
+        return self._embedding_dimension
+
     async def generate_embedding(self, text: str) -> List[float]:
-        """Generate embedding for text using Azure OpenAI."""
-        if not self.openai_client:
-            logger.warning("OpenAI client not available")
+        """Generate embedding for text using local model."""
+        if not self.embedder:
+            logger.warning("Local embedder not available")
             return []
-        
         try:
-            response = self.openai_client.embeddings.create(
-                input=text,
-                model=settings.azure_embedding_model
-            )
-            return response.data[0].embedding
+            # fastembed returns numpy arrays
+            vectors = list(self.embedder.embed([text]))
+            return vectors[0].tolist() if vectors else []
         except Exception as e:
             logger.error(f"Failed to generate embedding: {str(e)}")
             return []
@@ -350,6 +368,18 @@ class VectorService:
             return []
         
         try:
+            # Quick compatibility check: log if collection vector size mismatches the embedder
+            try:
+                info = self.qdrant_client.get_collection(collection_name)
+                size_in_collection = getattr(getattr(info.config, 'params', None), 'vectors', None)
+                size_val = getattr(size_in_collection, 'size', None)
+                dim = self.get_embedding_dimension() or settings.embedding_dimension
+                if size_val is not None and dim is not None and size_val != dim:
+                    logger.error(
+                        f"❌ Vector size mismatch for collection '{collection_name}': collection={size_val}, embedder={dim}. Searches may fail."
+                    )
+            except Exception:
+                pass
             # Check if collection exists
             collections = self.qdrant_client.get_collections()
             collection_names = [col.name for col in collections.collections]

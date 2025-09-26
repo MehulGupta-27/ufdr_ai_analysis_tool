@@ -197,6 +197,22 @@ class DatabaseManager:
             print(f"Error getting cached result: {e}")
         return None
     
+    def clear_cache(self) -> bool:
+        """Clear all Redis cache for this application namespace."""
+        try:
+            # If namespaced, delete pattern; here we flush the DB safely in dev
+            self.redis_client.flushdb()
+            return True
+        except Exception as e:
+            print(f"Error clearing cache: {e}")
+            return False
+    
+    def ping_redis(self) -> bool:
+        try:
+            return bool(self.redis_client.ping())
+        except Exception:
+            return False
+    
     def close_connections(self):
         """Close all database connections"""
         if self.neo4j_driver:

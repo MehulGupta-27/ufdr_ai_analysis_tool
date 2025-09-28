@@ -16,6 +16,7 @@ from app.core.database_manager import db_manager
 from app.repositories.neo4j_repository import neo4j_repo
 from app.services.vector_service import vector_service
 from app.services.case_manager import case_manager
+from app.services.schema_service import schema_service
 
 class DataProcessor:
     def __init__(self):
@@ -28,7 +29,25 @@ class DataProcessor:
         try:
             print(f"🏗️ Setting up case environment for: {case_number}")
             
-            # Create case-specific environment
+            # First, check if case already exists and has data BEFORE creating environment
+            # This prevents the case_manager from dropping existing data
+            safe_case_name = case_manager.sanitize_case_name(case_number)
+            if await self._case_has_data(case_number, safe_case_name):
+                print(f"⚠️ Case {case_number} already has data. Skipping duplicate processing.")
+                return {
+                    "success": True,
+                    "case_number": case_number,
+                    "safe_case_name": safe_case_name,
+                    "message": "Case already has data, skipping duplicate processing",
+                    "records_processed": {
+                        "chat_records": 0,
+                        "call_records": 0,
+                        "contacts": 0,
+                        "media_files": 0
+                    }
+                }
+            
+            # Create case-specific environment (only if no existing data)
             case_env = await case_manager.create_case_environment(case_number, investigator)
             safe_case_name = case_env["safe_case_name"]
             
@@ -52,6 +71,11 @@ class DataProcessor:
             await self._store_in_case_neo4j(parsed_data, safe_case_name)
             print(f"✅ Neo4j graph storage completed")
             
+            # Extract schema for improved AI query accuracy
+            print(f"🔄 Extracting schema for improved AI accuracy...")
+            await schema_service.extract_case_schema(case_number)
+            print(f"✅ Schema extraction completed")
+            
             return {
                 "success": True,
                 "case_number": case_number,
@@ -71,6 +95,165 @@ class DataProcessor:
                 "success": False,
                 "error": str(e)
             }
+    
+    async def _case_has_data(self, case_number: str, safe_case_name: str) -> bool:
+        """Check if case already has data to prevent duplicate processing"""
+        try:
+            db = next(get_db())
+            schema_name = f"case_{safe_case_name}"
+            
+            # First check if schema exists
+            schema_check_sql = text("""
+                SELECT schema_name 
+                FROM information_schema.schemata 
+                WHERE schema_name = :schema_name
+            """)
+            
+            schema_exists = db.execute(schema_check_sql, {"schema_name": schema_name}).fetchone()
+            
+            if not schema_exists:
+                db.close()
+                return False
+            
+            # Check if any UFDR reports exist for this case
+            check_sql = text(f"""
+                SELECT COUNT(*) FROM {schema_name}.ufdr_reports 
+                WHERE case_number = :case_number
+            """)
+            
+            result = db.execute(check_sql, {"case_number": case_number}).scalar()
+            has_data = result > 0 if result else False
+            
+            db.close()
+            return has_data
+            
+        except Exception as e:
+            print(f"⚠️ Error checking case data: {e}")
+            return False
+    
+    async def clear_case_data(self, case_number: str) -> bool:
+        """Clear all data for a specific case"""
+        try:
+            from app.services.case_manager import case_manager
+            
+            case_info = case_manager.get_case_info(case_number)
+            if not case_info:
+                print(f"❌ Case {case_number} not found")
+                return False
+            
+            safe_case_name = case_info["safe_case_name"]
+            schema_name = f"case_{safe_case_name}"
+            
+            db = next(get_db())
+            
+            # Clear all data from case schema
+            clear_sql = text(f"""
+                TRUNCATE TABLE {schema_name}.chat_records CASCADE;
+                TRUNCATE TABLE {schema_name}.call_records CASCADE;
+                TRUNCATE TABLE {schema_name}.contacts CASCADE;
+                TRUNCATE TABLE {schema_name}.media_files CASCADE;
+                TRUNCATE TABLE {schema_name}.ufdr_reports CASCADE;
+            """)
+            
+            db.execute(clear_sql)
+            db.commit()
+            db.close()
+            
+            print(f"✅ Cleared all data for case {case_number}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error clearing case data: {e}")
+            return False
+    
+    async def remove_duplicate_data(self, case_number: str) -> Dict[str, Any]:
+        """Remove duplicate records from a case based on content and timestamp"""
+        try:
+            from app.services.case_manager import case_manager
+            
+            case_info = case_manager.get_case_info(case_number)
+            if not case_info:
+                return {"success": False, "error": f"Case {case_number} not found"}
+            
+            safe_case_name = case_info["safe_case_name"]
+            schema_name = f"case_{safe_case_name}"
+            
+            db = next(get_db())
+            duplicates_removed = {
+                "chat_records": 0,
+                "call_records": 0,
+                "contacts": 0,
+                "media_files": 0
+            }
+            
+            # Remove duplicate chat records based on content, sender, receiver, and timestamp
+            chat_dedup_sql = text(f"""
+                DELETE FROM {schema_name}.chat_records 
+                WHERE id NOT IN (
+                    SELECT DISTINCT ON (sender_number, receiver_number, message_content, timestamp) id
+                    FROM {schema_name}.chat_records 
+                    ORDER BY sender_number, receiver_number, message_content, timestamp, created_at
+                )
+            """)
+            
+            result = db.execute(chat_dedup_sql)
+            duplicates_removed["chat_records"] = result.rowcount
+            
+            # Remove duplicate call records based on caller, receiver, and timestamp
+            call_dedup_sql = text(f"""
+                DELETE FROM {schema_name}.call_records 
+                WHERE id NOT IN (
+                    SELECT DISTINCT ON (caller_number, receiver_number, timestamp) id
+                    FROM {schema_name}.call_records 
+                    ORDER BY caller_number, receiver_number, timestamp, created_at
+                )
+            """)
+            
+            result = db.execute(call_dedup_sql)
+            duplicates_removed["call_records"] = result.rowcount
+            
+            # Remove duplicate contacts based on name and phone numbers
+            contact_dedup_sql = text(f"""
+                DELETE FROM {schema_name}.contacts 
+                WHERE id NOT IN (
+                    SELECT DISTINCT ON (name, phone_numbers) id
+                    FROM {schema_name}.contacts 
+                    ORDER BY name, phone_numbers, created_at
+                )
+            """)
+            
+            result = db.execute(contact_dedup_sql)
+            duplicates_removed["contacts"] = result.rowcount
+            
+            # Remove duplicate media files based on filename and file_path
+            media_dedup_sql = text(f"""
+                DELETE FROM {schema_name}.media_files 
+                WHERE id NOT IN (
+                    SELECT DISTINCT ON (filename, file_path) id
+                    FROM {schema_name}.media_files 
+                    ORDER BY filename, file_path, created_at
+                )
+            """)
+            
+            result = db.execute(media_dedup_sql)
+            duplicates_removed["media_files"] = result.rowcount
+            
+            db.commit()
+            db.close()
+            
+            total_removed = sum(duplicates_removed.values())
+            print(f"✅ Removed {total_removed} duplicate records from case {case_number}")
+            
+            return {
+                "success": True,
+                "case_number": case_number,
+                "duplicates_removed": duplicates_removed,
+                "total_removed": total_removed
+            }
+            
+        except Exception as e:
+            print(f"❌ Error removing duplicates: {e}")
+            return {"success": False, "error": str(e)}
     
     async def _store_in_case_postgres(self, parsed_data: Dict[str, Any], 
                                       file_path: str, case_number: str, 
@@ -111,6 +294,7 @@ class DataProcessor:
                      timestamp, message_type, is_deleted, metadata)
                     VALUES (:ufdr_report_id, :app_name, :sender_number, :receiver_number, :message_content,
                             :timestamp, :message_type, :is_deleted, :metadata)
+                    ON CONFLICT (sender_number, receiver_number, message_content, timestamp) DO NOTHING
                 """)
                 
                 db.execute(chat_sql, {
@@ -131,6 +315,7 @@ class DataProcessor:
                     INSERT INTO {schema_name}.call_records 
                     (ufdr_report_id, caller_number, receiver_number, call_type, duration, timestamp, metadata)
                     VALUES (:ufdr_report_id, :caller_number, :receiver_number, :call_type, :duration, :timestamp, :metadata)
+                    ON CONFLICT (caller_number, receiver_number, timestamp) DO NOTHING
                 """)
                 
                 db.execute(call_sql, {
@@ -149,6 +334,7 @@ class DataProcessor:
                     INSERT INTO {schema_name}.contacts 
                     (ufdr_report_id, name, phone_numbers, email_addresses, metadata)
                     VALUES (:ufdr_report_id, :name, :phone_numbers, :email_addresses, :metadata)
+                    ON CONFLICT (name, phone_numbers) DO NOTHING
                 """)
                 
                 db.execute(contact_sql, {
@@ -167,6 +353,7 @@ class DataProcessor:
                      modified_date, hash_md5, hash_sha256, metadata)
                     VALUES (:ufdr_report_id, :filename, :file_path, :file_type, :file_size, :created_date,
                             :modified_date, :hash_md5, :hash_sha256, :metadata)
+                    ON CONFLICT (filename, file_path) DO NOTHING
                 """)
                 
                 db.execute(media_sql, {

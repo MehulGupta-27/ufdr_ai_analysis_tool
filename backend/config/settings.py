@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     
     # Gemini Configuration
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "models/gemini-2.5-pro")
+
     
     # Redis Configuration
     redis_host: str = os.getenv("REDIS_HOST", "localhost")
@@ -47,5 +49,6 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
+        extra = "allow"
 
 settings = Settings()

@@ -30,6 +30,11 @@ class CaseManager:
         try:
             logger.info(f"🏗️ Creating case environment for: {case_number}")
             
+            # Check if case already exists
+            if case_number in self.active_cases:
+                logger.info(f"📋 Case {case_number} already exists, returning existing environment")
+                return self.active_cases[case_number]
+            
             # Sanitize case number for database names
             safe_case_name = self._sanitize_case_name(case_number)
             
@@ -126,7 +131,35 @@ class CaseManager:
             # Create schema for the case
             schema_name = f"case_{safe_case_name}"
             
-            # Drop schema if exists (for fresh start)
+            # Check if schema already exists and has data
+            schema_check_sql = text("""
+                SELECT schema_name 
+                FROM information_schema.schemata 
+                WHERE schema_name = :schema_name
+            """)
+            
+            schema_exists = db.execute(schema_check_sql, {"schema_name": schema_name}).fetchone()
+            
+            if schema_exists:
+                # Check if schema has any data
+                data_check_sql = text(f"""
+                    SELECT COUNT(*) FROM {schema_name}.ufdr_reports
+                """)
+                try:
+                    data_count = db.execute(data_check_sql).scalar()
+                    if data_count > 0:
+                        print(f"⚠️ Schema {schema_name} already exists with data. Skipping schema creation.")
+                        db.close()
+                        return {
+                            "status": "skipped",
+                            "schema_name": schema_name,
+                            "reason": "Schema already exists with data"
+                        }
+                except Exception:
+                    # Schema exists but no tables yet, continue with creation
+                    pass
+            
+            # Drop schema if exists (only if no data)
             db.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
             
             # Create new schema
@@ -208,6 +241,23 @@ class CaseManager:
             CREATE INDEX idx_{safe_case_name}_chat_content ON {schema_name}.chat_records USING gin(to_tsvector('english', message_content));
             CREATE INDEX idx_{safe_case_name}_call_timestamp ON {schema_name}.call_records(timestamp);
             CREATE INDEX idx_{safe_case_name}_contacts_name ON {schema_name}.contacts(name);
+            
+            -- Add unique constraints to prevent duplicates
+            ALTER TABLE {schema_name}.chat_records 
+            ADD CONSTRAINT unique_chat_record 
+            UNIQUE (sender_number, receiver_number, message_content, timestamp);
+            
+            ALTER TABLE {schema_name}.call_records 
+            ADD CONSTRAINT unique_call_record 
+            UNIQUE (caller_number, receiver_number, timestamp);
+            
+            ALTER TABLE {schema_name}.contacts 
+            ADD CONSTRAINT unique_contact 
+            UNIQUE (name, phone_numbers);
+            
+            ALTER TABLE {schema_name}.media_files 
+            ADD CONSTRAINT unique_media_file 
+            UNIQUE (filename, file_path);
             """
             
             db.execute(text(tables_sql))

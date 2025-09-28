@@ -1,8 +1,10 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -16,109 +18,89 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
 
-# Virtual Environment
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
+# PyInstaller
+*.manifest
+*.spec
 
-# Environment Variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-lerna-debug.log*
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-*.temp
-
-# Test files
-test_*.py
-*_test.py
-tests/
-coverage/
-.coverage
-.pytest_cache/
+# Unit test / coverage reports
+htmlcov/
 .tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
 
-# UFDR test files (keep sample files but ignore test outputs)
-test_*.ufdr
-*_test.ufdr
-extracted_*/
-processed_*/
+# Translations
+*.mo
+*.pot
 
-# Node.js (Frontend)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.npm
-.eslintcache
+# Django stuff
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
 
-# Build outputs
-build/
-dist/
+# Flask stuff
+instance/
+.webassets-cache
 
-# Docker
-.dockerignore
+# Scrapy stuff
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
 
 # pyenv
 .python-version
 
 # pipenv
-Pipfile.lock
+#Pipfile.lock
 
 # PEP 582
 __pypackages__/
 
-# Celery
+# Celery stuff
 celerybeat-schedule
 celerybeat.pid
 
 # SageMath parsed files
 *.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
 # Spyder project settings
 .spyderproject
@@ -138,13 +120,357 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# pytype static type analyzer
-.pytype/
+# =============================================================================
+# Node.js / React Frontend
+# =============================================================================
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
 
-# Cython debug symbols
-cython_debug/
+# React build output
+frontend/build/
+frontend/dist/
+frontend/.next/
+frontend/out/
 
-# Testing files
+# Next.js
+.next/
+out/
+
+# Nuxt.js
+.nuxt/
+dist/
+
+# Gatsby files
+.cache/
+public/
+
+# Storybook build outputs
+.out/
+.storybook-out/
+
+# =============================================================================
+# Environment Variables
+# =============================================================================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.staging
+
+# =============================================================================
+# IDE and Editor Files
+# =============================================================================
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# =============================================================================
+# Operating System Files
+# =============================================================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+
+# =============================================================================
+# Database Files
+# =============================================================================
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# PostgreSQL
+*.dump
+*.sql
+
+# =============================================================================
+# Log Files
+# =============================================================================
+*.log
+logs/
+log/
+
+# =============================================================================
+# Temporary Files
+# =============================================================================
+*.tmp
+*.temp
+temp/
+tmp/
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# UFDR Forensic Data Files
+# =============================================================================
+# Test and demo UFDR files (keep actual case files but ignore test samples)
+test*.ufdr
 testing-ufdr/
+demo*.ufdr
+sample*.ufdr
+*_test.ufdr
+*_demo.ufdr
 
-todo.md
+# Case data directories (sensitive - should not be in version control)
+case_data/
+cases/
+uploads/
+forensic_data/
+evidence/
+
+# =============================================================================
+# Backup Files
+# =============================================================================
+*.bak
+*.backup
+*.old
+*.orig
+
+# =============================================================================
+# Docker and Container Data
+# =============================================================================
+# Docker volumes (if using local volumes)
+postgres_data/
+qdrant_data/
+neo4j_data/
+redis_data/
+docker_data/
+
+# Docker Compose override files
+docker-compose.override.yml
+docker-compose.local.yml
+
+# =============================================================================
+# Database Storage Directories
+# =============================================================================
+# Qdrant vector database
+qdrant_storage/
+qdrant_data/
+
+# Neo4j graph database
+neo4j_data/
+neo4j_storage/
+
+# Redis cache
+redis_data/
+redis_storage/
+
+# PostgreSQL data
+postgres_data/
+postgres_storage/
+
+# =============================================================================
+# Generated Reports and Outputs
+# =============================================================================
+# Generated reports
+reports/
+output/
+exports/
+
+# PDF reports
+*.pdf
+
+# Excel/CSV exports
+*.xlsx
+*.csv
+exports/
+
+# =============================================================================
+# API Keys and Secrets
+# =============================================================================
+secrets.json
+credentials.json
+*.key
+*.pem
+*.p12
+*.pfx
+config/secrets/
+secrets/
+
+# =============================================================================
+# Jupyter Notebooks
+# =============================================================================
+.ipynb_checkpoints/
+
+# =============================================================================
+# Coverage and Testing
+# =============================================================================
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+.tox/
+.nox/
+
+# =============================================================================
+# Profiling and Performance
+# =============================================================================
+.prof
+*.prof
+profile_results/
+
+# =============================================================================
+# Local Development Files
+# =============================================================================
+local_settings.py
+dev_settings.py
+local_config.py
+dev_config.py
+settings_local.py
+
+# =============================================================================
+# Archive Files
+# =============================================================================
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.tar
+*.gz
+
+# =============================================================================
+# Compiled Files
+# =============================================================================
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# =============================================================================
+# Distribution Files
+# =============================================================================
+*.egg-info/
+dist/
+build/
+*.egg
+
+# =============================================================================
+# Documentation Build
+# =============================================================================
+docs/_build/
+site/
+_site/
+
+# =============================================================================
+# FastAPI Specific
+# =============================================================================
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =============================================================================
+# AI/ML Model Files (if storing locally)
+# =============================================================================
+models/
+*.model
+*.pkl
+*.joblib
+*.h5
+*.pb
+
+# =============================================================================
+# Vector Embeddings Cache
+# =============================================================================
+embeddings_cache/
+vector_cache/
+embedding_cache/
+
+# =============================================================================
+# Case-Specific Data (Sensitive)
+# =============================================================================
+# Never commit actual case data
+case_*/
+investigation_*/
+forensic_*/
+evidence_*/
+
+# =============================================================================
+# Temporary Upload Directories
+# =============================================================================
+uploads/
+temp_uploads/
+file_uploads/
+
+# =============================================================================
+# Performance Monitoring
+# =============================================================================
+*.prof
+profile_data/
+monitoring/
+
+# =============================================================================
+# Security and Compliance
+# =============================================================================
+# Audit logs
+audit_logs/
+compliance/
+security/
+
+# =============================================================================
+# Development Tools
+# =============================================================================
+# Local development databases
+dev.db
+test.db
+local.db
+
+# Development configuration
+dev.env
+local.env
+development.env
+
+
+\ufdr-adda

@@ -436,6 +436,19 @@ class VectorService:
             logger.error(f"❌ Case collection search failed: {str(e)}")
             return []
 
+    async def search_case_data(
+        self,
+        query: str,
+        collection_name: str,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Search case data - wrapper for search_case_collection for compatibility"""
+        return await self.search_case_collection(
+            query=query,
+            collection_name=collection_name,
+            limit=limit
+        )
+
 
 # Global vector service instance
 vector_service = VectorService()

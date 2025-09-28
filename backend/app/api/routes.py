@@ -13,6 +13,7 @@ from app.services.vector_service import vector_service
 from app.services.ufdr_report_generator import ufdr_report_generator
 from app.services.pdf_generator import pdf_generator
 from app.services.case_manager import case_manager
+from app.services.schema_service import schema_service
 from app.models.database import get_db
 from sqlalchemy import text
 
@@ -108,18 +109,15 @@ async def execute_query(request: QueryRequest):
                 case_number = active_cases[-1]  # Get the most recent case
                 print(f"🎯 Using most recent case: {case_number}")
         
-        # Execute hybrid search with case context
+        # Execute hybrid search with case context - now returns processed response
         results = await ai_service.execute_hybrid_search(request.query, case_number)
-        
-        # Generate investigation report
-        report = await ai_service.generate_investigation_report(results)
         
         return JSONResponse(content={
             "query": request.query,
             "case_number": case_number,
-            "results": results,
-            "report": report,
-            "success": True
+            "answer": results.get("answer", "No response generated"),
+            "success": results.get("success", False),
+            "data_sources": results.get("data_sources", {})
         })
         
     except Exception as e:
@@ -475,29 +473,18 @@ async def quick_query(q: str, case_number: Optional[str] = None):
                     "query": q,
                     "case_number": None,
                     "answer": "No active cases found. Please upload a UFDR file first to analyze forensic data.",
-                    "results_count": {"sql_results": 0, "vector_results": 0},
                     "success": False
                 })
         
-        # Execute search with case context
+        # Execute search with case context - now returns processed response
         results = await ai_service.execute_hybrid_search(q, case_number)
-        
-        # Dynamic itemized answer for show/list style queries, otherwise fallback
-        show_words = ["show", "list", "display", "all", "results"]
-        if any(w in q.lower() for w in show_words):
-            concise_answer = ai_service.render_itemized_answer(q, results)
-        else:
-            concise_answer = ai_service._generate_basic_report(results)
         
         return JSONResponse(content={
             "query": q,
             "case_number": case_number,
-            "answer": concise_answer,
-            "results_count": {
-                "sql_results": len(results.get('sql_results', [])),
-                "vector_results": len(results.get('vector_results', []))
-            },
-            "success": True
+            "answer": results.get("answer", "No response generated"),
+            "success": results.get("success", False),
+            "data_sources": results.get("data_sources", {})
         })
         
     except Exception as e:
@@ -521,6 +508,28 @@ async def cleanup_all_data():
     except Exception as e:
         print(f"❌ Error during cleanup: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error during cleanup: {str(e)}")
+
+@router.delete("/case/{case_number}/data")
+async def clear_case_data(case_number: str):
+    """Clear all data for a specific case"""
+    
+    try:
+        print(f"🗑️ Clearing data for case: {case_number}")
+        
+        success = await data_processor.clear_case_data(case_number)
+        
+        if success:
+            return JSONResponse(content={
+                "success": True,
+                "message": f"Data cleared successfully for case {case_number}",
+                "case_number": case_number
+            })
+        else:
+            raise HTTPException(status_code=404, detail=f"Case {case_number} not found or could not be cleared")
+        
+    except Exception as e:
+        print(f"❌ Error clearing case data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing case data: {str(e)}")
 
 @router.get("/case/list")
 async def list_active_cases():
@@ -649,3 +658,150 @@ async def admin_cache_status():
     return JSONResponse(content={
         "redis_alive": db_manager.ping_redis()
     })
+
+@router.post("/schema/extract/{case_number}")
+async def extract_case_schema(case_number: str):
+    """Manually extract schema for a specific case to improve AI accuracy."""
+    try:
+        print(f"🔄 Manually extracting schema for case: {case_number}")
+        
+        schema_details = await schema_service.extract_case_schema(case_number)
+        
+        if schema_details:
+            return JSONResponse(content={
+                "success": True,
+                "message": f"Schema extracted successfully for case {case_number}",
+                "case_number": case_number,
+                "tables": list(schema_details.get("tables", {}).keys()),
+                "relationships": len(schema_details.get("relationships", [])),
+                "statistics": schema_details.get("statistics", {})
+            })
+        else:
+            raise HTTPException(status_code=404, detail=f"Could not extract schema for case {case_number}")
+        
+    except Exception as e:
+        print(f"❌ Error extracting schema: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error extracting schema: {str(e)}")
+
+@router.get("/schema/summary/{case_number}")
+async def get_schema_summary(case_number: str):
+    """Get human-readable schema summary for a case."""
+    try:
+        # Ensure schema is extracted
+        if not schema_service.is_schema_cached(case_number):
+            await schema_service.extract_case_schema(case_number)
+        
+        schema_summary = schema_service.generate_schema_summary(case_number)
+        
+        return JSONResponse(content={
+            "success": True,
+            "case_number": case_number,
+            "schema_summary": schema_summary
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting schema summary: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting schema summary: {str(e)}")
+
+@router.get("/schema/details/{case_number}")
+async def get_schema_details(case_number: str):
+    """Get detailed schema information for a case."""
+    try:
+        schema_details = schema_service.get_cached_schema(case_number)
+        
+        if not schema_details:
+            # Extract schema if not cached
+            schema_details = await schema_service.extract_case_schema(case_number)
+        
+        if schema_details:
+            return JSONResponse(content={
+                "success": True,
+                "case_number": case_number,
+                "schema_details": schema_details
+            })
+        else:
+            raise HTTPException(status_code=404, detail=f"Schema not found for case {case_number}")
+        
+    except Exception as e:
+        print(f"❌ Error getting schema details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting schema details: {str(e)}")
+
+@router.delete("/schema/cache/{case_number}")
+async def clear_schema_cache(case_number: str):
+    """Clear schema cache for a specific case."""
+    try:
+        schema_service.clear_schema_cache(case_number)
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Schema cache cleared for case {case_number}"
+        })
+        
+    except Exception as e:
+        print(f"❌ Error clearing schema cache: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing schema cache: {str(e)}")
+
+@router.post("/schema/refresh-all")
+async def refresh_all_schemas():
+    """Refresh schema cache for all active cases."""
+    try:
+        active_cases = case_manager.list_active_cases()
+        refreshed_cases = []
+        
+        for case_number in active_cases:
+            try:
+                await schema_service.extract_case_schema(case_number)
+                refreshed_cases.append(case_number)
+            except Exception as e:
+                print(f"⚠️ Failed to refresh schema for case {case_number}: {e}")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Schema refresh completed for {len(refreshed_cases)} cases",
+            "refreshed_cases": refreshed_cases,
+            "total_cases": len(active_cases)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error refreshing all schemas: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error refreshing all schemas: {str(e)}")
+
+@router.post("/data/remove-duplicates/{case_number}")
+async def remove_duplicate_data(case_number: str):
+    """Remove duplicate records from a case."""
+    try:
+        result = await data_processor.remove_duplicate_data(case_number)
+        
+        if result["success"]:
+            return JSONResponse(content={
+                "success": True,
+                "case_number": case_number,
+                "duplicates_removed": result["duplicates_removed"],
+                "total_removed": result["total_removed"],
+                "message": f"Removed {result['total_removed']} duplicate records"
+            })
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+    except Exception as e:
+        print(f"❌ Error removing duplicates: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error removing duplicates: {str(e)}")
+
+@router.delete("/data/clear-case/{case_number}")
+async def clear_case_data(case_number: str):
+    """Clear all data for a specific case."""
+    try:
+        success = await data_processor.clear_case_data(case_number)
+        
+        if success:
+            return JSONResponse(content={
+                "success": True,
+                "case_number": case_number,
+                "message": f"All data cleared for case {case_number}"
+            })
+        else:
+            raise HTTPException(status_code=400, detail=f"Failed to clear data for case {case_number}")
+        
+    except Exception as e:
+        print(f"❌ Error clearing case data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing case data: {str(e)}")

@@ -118,56 +118,60 @@ class UFDRParser:
             'metadata': data.get('metadata', {'extraction_date': datetime.utcnow()})
         }
 
-        # First, try direct mapping if keys exist
-        try:
-            # Chats
-            for chat in data.get('chat_records', []) or []:
-                parsed['chat_records'].append({
-                    'app_name': chat.get('app_name'),
-                    'sender_number': chat.get('sender_number'),
-                    'receiver_number': chat.get('receiver_number'),
-                    'message_content': chat.get('message_content'),
-                    'timestamp': self._coerce_timestamp(chat.get('timestamp')),
-                    'message_type': chat.get('message_type', 'text'),
-                    'is_deleted': bool(chat.get('is_deleted', False)),
-                    'metadata': chat.get('metadata', {})
-                })
-            # Calls
-            for call in data.get('call_records', []) or []:
-                parsed['call_records'].append({
-                    'caller_number': call.get('caller_number'),
-                    'receiver_number': call.get('receiver_number'),
-                    'call_type': call.get('call_type', 'unknown'),
-                    'duration': int(call.get('duration', 0)) if call.get('duration') is not None else 0,
-                    'timestamp': self._coerce_timestamp(call.get('timestamp')),
-                    'metadata': call.get('metadata', {})
-                })
-            # Contacts
-            for contact in data.get('contacts', []) or []:
-                parsed['contacts'].append({
-                    'name': contact.get('name'),
-                    'phone_numbers': contact.get('phone_numbers', []) or [],
-                    'email_addresses': contact.get('email_addresses', []) or [],
-                    'metadata': contact.get('metadata', {})
-                })
-            # Media
-            for media in data.get('media_files', []) or []:
-                parsed['media_files'].append({
-                    'filename': media.get('filename'),
-                    'file_path': media.get('file_path'),
-                    'file_type': media.get('file_type'),
-                    'file_size': int(media.get('file_size', 0)) if media.get('file_size') is not None else 0,
-                    'created_date': self._coerce_timestamp(media.get('created_date')),
-                    'modified_date': self._coerce_timestamp(media.get('modified_date')),
-                    'hash_md5': media.get('hash_md5'),
-                    'hash_sha256': media.get('hash_sha256'),
-                    'metadata': media.get('metadata', {})
-                })
-        except Exception:
-            pass
-
-        # Then, recursively traverse to capture any vendor-specific nesting
-        self._traverse_and_extract(data, parsed)
+        # Check if we have direct arrays - if so, use them and skip traversal
+        has_direct_arrays = any(key in data for key in ['chat_records', 'call_records', 'contacts', 'media_files'])
+        
+        if has_direct_arrays:
+            # Use direct mapping if keys exist
+            try:
+                # Chats
+                for chat in data.get('chat_records', []) or []:
+                    parsed['chat_records'].append({
+                        'app_name': chat.get('app_name'),
+                        'sender_number': chat.get('sender_number'),
+                        'receiver_number': chat.get('receiver_number'),
+                        'message_content': chat.get('message_content'),
+                        'timestamp': self._coerce_timestamp(chat.get('timestamp')),
+                        'message_type': chat.get('message_type', 'text'),
+                        'is_deleted': bool(chat.get('is_deleted', False)),
+                        'metadata': chat.get('metadata', {})
+                    })
+                # Calls
+                for call in data.get('call_records', []) or []:
+                    parsed['call_records'].append({
+                        'caller_number': call.get('caller_number'),
+                        'receiver_number': call.get('receiver_number'),
+                        'call_type': call.get('call_type', 'unknown'),
+                        'duration': int(call.get('duration', 0)) if call.get('duration') is not None else 0,
+                        'timestamp': self._coerce_timestamp(call.get('timestamp')),
+                        'metadata': call.get('metadata', {})
+                    })
+                # Contacts
+                for contact in data.get('contacts', []) or []:
+                    parsed['contacts'].append({
+                        'name': contact.get('name'),
+                        'phone_numbers': contact.get('phone_numbers', []) or [],
+                        'email_addresses': contact.get('email_addresses', []) or [],
+                        'metadata': contact.get('metadata', {})
+                    })
+                # Media
+                for media in data.get('media_files', []) or []:
+                    parsed['media_files'].append({
+                        'filename': media.get('filename'),
+                        'file_path': media.get('file_path'),
+                        'file_type': media.get('file_type'),
+                        'file_size': int(media.get('file_size', 0)) if media.get('file_size') is not None else 0,
+                        'created_date': self._coerce_timestamp(media.get('created_date')),
+                        'modified_date': self._coerce_timestamp(media.get('modified_date')),
+                        'hash_md5': media.get('hash_md5'),
+                        'hash_sha256': media.get('hash_sha256'),
+                        'metadata': media.get('metadata', {})
+                    })
+            except Exception:
+                pass
+        else:
+            # No direct arrays found, use recursive traversal
+            self._traverse_and_extract(data, parsed)
 
         print(
             f"✅ UFDR extraction (JSON): chats={len(parsed['chat_records'])}, calls={len(parsed['call_records'])}, contacts={len(parsed['contacts'])}, media={len(parsed['media_files'])}"

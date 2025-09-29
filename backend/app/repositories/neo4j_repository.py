@@ -110,7 +110,17 @@ class Neo4jRepository:
         try:
             with self.driver.session() as session:
                 result = session.run(query, parameters or {})
-                return [dict(record) for record in result]
+                records = []
+                for record in result:
+                    # Convert Neo4j objects to dictionaries
+                    record_dict = {}
+                    for key, value in record.items():
+                        if hasattr(value, '__dict__'):  # Neo4j Node or Relationship object
+                            record_dict[key] = dict(value)
+                        else:
+                            record_dict[key] = value
+                    records.append(record_dict)
+                return records
         except Exception as e:
             logger.error(f"Failed to execute Cypher query: {str(e)}")
             raise
@@ -132,13 +142,36 @@ class Neo4jRepository:
     
     async def find_communication_network(self, person_ids: List[str]) -> List[Dict[str, Any]]:
         """Find communication network for given persons."""
-        query = """
-        MATCH (p1:Person)-[r:COMMUNICATES_WITH]-(p2:Person)
-        WHERE p1.id IN $person_ids OR p2.id IN $person_ids
+        if not person_ids:
+            return []
+            
+        # Extract case_id from the first person_id to determine the label pattern
+        case_id = person_ids[0].split('_person_')[0] if '_person_' in person_ids[0] else 'unknown'
+        label = f'Person_{case_id}'
+        
+        # Use directed relationship to avoid duplicates
+        query = f"""
+        MATCH (p1:{label})-[r:COMMUNICATES_WITH]->(p2:{label})
+        WHERE p1.id IN $person_ids
         RETURN p1, r, p2
         ORDER BY r.frequency DESC
         """
-        return await self.execute_cypher(query, {"person_ids": person_ids})
+        
+        try:
+            results = await self.execute_cypher(query, {"person_ids": person_ids})
+            # Transform the results to match frontend expectations
+            transformed_results = []
+            for result in results:
+                if 'p1' in result and 'p2' in result and 'r' in result:
+                    transformed_results.append({
+                        'p1': result['p1'],
+                        'p2': result['p2'], 
+                        'r': result['r']
+                    })
+            return transformed_results
+        except Exception as e:
+            logger.error(f"Error in find_communication_network: {str(e)}")
+            return []
     
     async def find_shortest_path(self, source_id: str, target_id: str) -> List[Dict[str, Any]]:
         """Find shortest path between two persons."""

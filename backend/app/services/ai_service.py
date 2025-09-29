@@ -5,9 +5,11 @@ Handles natural language query processing and SQL generation using LLM with full
 
 import logging
 import json
+import hashlib
 from typing import Dict, List, Any, Optional
 import google.generativeai as genai
 from app.services.schema_service import schema_service
+from app.core.database_manager import db_manager
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +59,20 @@ class AIService:
             **SEMANTIC-ONLY QUERIES** (Complex, contextual analysis):
             - "Show suspicious conversations" → Contextual analysis needed
             - "Find criminal activities" → Pattern recognition required
-            - "Show relationships between people" → Network analysis
             - "Find evidence of [complex behavior]" → Behavioral analysis
-            - "Analyze communication patterns" → Pattern analysis
-            - "Show people he is related with" → Relationship mapping
             - "Find conversations about [complex topic]" → Semantic understanding
+            - "Show me suspicious communications" → Enhanced suspicious detection
+            - "Find illegal activities" → Criminal pattern analysis
+            - "Show dangerous conversations" → Threat assessment
+            - "Find fraudulent messages" → Financial crime detection
+            
+            **GRAPH-ONLY QUERIES** (Network/relationship analysis):
+            - "Show relationships between people" → Network analysis
+            - "Find connections between contacts" → Graph traversal
+            - "Analyze communication patterns" → Network analysis
+            - "Show people he is related with" → Relationship mapping
+            - "Who are the most connected people" → Centrality analysis
+            - "Find shortest path between contacts" → Graph algorithms
             
             **HYBRID QUERIES** (Need both approaches):
             - "Find WhatsApp messages about meetings" → SQL for WhatsApp + semantic for meetings
@@ -70,14 +81,15 @@ class AIService:
             DECISION PROCESS:
             1. Can this be answered with a simple SQL query? → SQL_ONLY
             2. Does this require understanding context/meaning? → SEMANTIC_ONLY  
-            3. Does this need both direct data + context? → HYBRID
+            3. Does this involve relationships/connections/network analysis? → GRAPH_ONLY
+            4. Does this need both direct data + context? → HYBRID
             
             Return JSON format:
             {{
-                "search_approach": "sql_only|semantic_only|hybrid",
+                "search_approach": "sql_only|semantic_only|graph_only|hybrid",
                 "reasoning": "Brief explanation of why this approach was chosen",
                 "target_data": ["chat_records", "call_records", "contacts", "media_files", "device_info"],
-                "query_type": "count|list|search|analyze|relationship",
+                "query_type": "count|list|search|analyze|relationship|network",
                 "complexity": "simple|moderate|complex",
                 "confidence": 0.9
             }}
@@ -96,7 +108,11 @@ class AIService:
                 return await self._enhanced_fallback_analysis(query)
                 
         except Exception as e:
-            print(f"❌ Error in AI query analysis: {e}")
+            error_str = str(e)
+            if "quota" in error_str.lower() or "429" in error_str:
+                print(f"⚠️ Gemini API quota exceeded, using fallback analysis")
+            else:
+                print(f"❌ Error in AI query analysis: {e}")
             return await self._enhanced_fallback_analysis(query)
     
     async def _enhanced_fallback_analysis(self, query: str) -> Dict[str, Any]:
@@ -252,8 +268,17 @@ class AIService:
             return sql_query
             
         except Exception as e:
-            print(f"❌ Error generating contextual SQL query: {e}")
+            error_str = str(e)
+            if "quota" in error_str.lower() or "429" in error_str:
+                print(f"⚠️ Gemini API quota exceeded for SQL generation")
+            else:
+                print(f"❌ Error generating contextual SQL query: {e}")
             return ""
+
+    def _generate_cache_key(self, query: str, case_number: str) -> str:
+        """Generate consistent cache key for query and case"""
+        key_string = f"{query.lower().strip()}_{case_number}"
+        return hashlib.md5(key_string.encode()).hexdigest()
 
     async def execute_hybrid_search(self, query: str, case_number: Optional[str] = None) -> Dict[str, Any]:
         """Execute intelligent search with dynamic routing based on query complexity"""
@@ -263,6 +288,15 @@ class AIService:
         try:
             # Store case number for use in response generation
             self._current_case_number = case_number
+            
+            # Check cache first if case number is provided
+            if case_number:
+                cache_key = self._generate_cache_key(query, case_number)
+                cached_result = db_manager.get_cached_result(cache_key)
+                if cached_result:
+                    print(f"✅ Cache hit for query: {query}")
+                    return cached_result
+                print(f"❌ Cache miss for query: {query}")
             
             # Step 1: Analyze query to determine search approach
             analysis = await self.analyze_query_intent(query)
@@ -287,13 +321,17 @@ class AIService:
                 print(f"🔍 Using semantic-only approach for complex query")
                 raw_data["vector_results"] = await self._execute_semantic_only_search(query, case_number)
                 
+            elif search_approach == "graph_only":
+                print(f"🕸️ Using graph-only approach for relationship query")
+                raw_data["graph_results"] = await self._execute_graph_only_search(query, case_number)
+                
             elif search_approach == "hybrid":
                 print(f"🔄 Using hybrid approach for mixed query")
                 raw_data["sql_results"] = await self._execute_sql_only_search(query, case_number)
                 raw_data["vector_results"] = await self._execute_semantic_only_search(query, case_number)
             
             # Step 3: Generate human-readable response using LLM with all fetched data
-            if raw_data["sql_results"] or raw_data["vector_results"]:
+            if raw_data["sql_results"] or raw_data["vector_results"] or raw_data.get("graph_results"):
                 if self.gemini_model:
                     print(f"🤖 Processing all results through LLM for intelligent response...")
                     human_response = await self._generate_intelligent_response(query, raw_data, analysis)
@@ -301,7 +339,7 @@ class AIService:
                     print(f"⚠️ LLM not available, using fallback response")
                     human_response = self._generate_fallback_response(query, raw_data, analysis)
                 
-                return {
+                response_data = {
                     "query": query,
                     "case_number": case_number,
                     "answer": human_response,
@@ -310,19 +348,36 @@ class AIService:
                     "reasoning": reasoning,
                     "data_sources": {
                         "sql_results_count": len(raw_data["sql_results"]),
-                        "vector_results_count": len(raw_data["vector_results"])
+                        "vector_results_count": len(raw_data["vector_results"]),
+                        "graph_results_count": len(raw_data.get("graph_results", []))
                     }
                 }
+                
+                # Cache successful results
+                if case_number:
+                    cache_key = self._generate_cache_key(query, case_number)
+                    db_manager.cache_query_result(cache_key, response_data, ttl=3600)
+                    print(f"💾 Cached result for query: {query}")
+                
+                return response_data
             else:
-                return {
+                response_data = {
                     "query": query,
                     "case_number": case_number,
-                    "answer": "No results found for your query. Try rephrasing or check if the data exists.",
+                    "answer": "No results found",
                     "success": False,
                     "search_approach": search_approach,
                     "reasoning": reasoning,
-                    "data_sources": {"sql_results_count": 0, "vector_results_count": 0}
+                    "data_sources": {"sql_results_count": 0, "vector_results_count": 0, "graph_results_count": 0}
                 }
+                
+                # Cache empty results to avoid repeated processing
+                if case_number:
+                    cache_key = self._generate_cache_key(query, case_number)
+                    db_manager.cache_query_result(cache_key, response_data, ttl=300)  # Shorter TTL for empty results
+                    print(f"💾 Cached empty result for query: {query}")
+                
+                return response_data
             
         except Exception as e:
             print(f"❌ Error in dynamic search: {e}")
@@ -331,9 +386,9 @@ class AIService:
             return {
                 "query": query,
                 "case_number": case_number,
-                "answer": f"Error processing your query: {str(e)}",
+                "answer": "No results found",
                 "success": False,
-                "data_sources": {"sql_results_count": 0, "vector_results_count": 0}
+                "data_sources": {"sql_results_count": 0, "vector_results_count": 0, "graph_results_count": 0}
             }
 
     async def _execute_sql_only_search(self, query: str, case_number: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -383,18 +438,132 @@ class AIService:
             safe_case_name = case_info["safe_case_name"]
             collection_name = f"case_{safe_case_name}"
             
-            print(f"🔍 Semantic search in collection: {collection_name}")
-            results = await vector_service.search_case_data(
-                query=query,
-                collection_name=collection_name,
-                limit=20
-            )
+            # Check if this is a suspicious conversation query
+            query_lower = query.lower()
+            suspicious_keywords = ["suspicious", "criminal", "illegal", "threat", "dangerous", "fraud", "scam"]
+            
+            if any(keyword in query_lower for keyword in suspicious_keywords):
+                print(f"🔍 Enhanced suspicious conversation search in collection: {collection_name}")
+                results = await vector_service.find_suspicious_conversations(
+                    case_id=case_number,
+                    limit=20
+                )
+            else:
+                print(f"🔍 Standard semantic search in collection: {collection_name}")
+                results = await vector_service.search_case_data(
+                    query=query,
+                    collection_name=collection_name,
+                    limit=20
+                )
             
             print(f"📊 Semantic search found {len(results)} results")
             return results
             
         except Exception as e:
             print(f"❌ Error in semantic-only search: {e}")
+            return []
+    
+    async def _execute_graph_only_search(self, query: str, case_number: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Execute graph-based search using Neo4j for relationship queries"""
+        try:
+            from app.repositories.neo4j_repository import neo4j_repo
+            from app.services.case_manager import case_manager
+            
+            if not case_number:
+                print("❌ No case number provided for graph search")
+                return []
+            
+            # Get case info to determine the correct label pattern
+            case_info = case_manager.get_case_info(case_number)
+            if not case_info:
+                print(f"❌ Case {case_number} not found for graph search")
+                return []
+            
+            safe_case_name = case_info["safe_case_name"]
+            person_label = f'Person_{safe_case_name}'
+            
+            # Analyze query to determine graph operation
+            query_lower = query.lower()
+            
+            if "connections between contacts" in query_lower or "connections between people" in query_lower:
+                # Get all persons for this case
+                persons = await neo4j_repo.find_nodes(person_label)
+                if not persons:
+                    return []
+                
+                person_ids = [p.get('id', p.get('phone_number', '')) for p in persons if p.get('id') or p.get('phone_number')]
+                
+                # Get communication network
+                network = await neo4j_repo.find_communication_network(person_ids)
+                
+                # Format results for AI processing
+                results = []
+                for connection in network:
+                    if 'p1' in connection and 'p2' in connection and 'r' in connection:
+                        results.append({
+                            "type": "connection",
+                            "person1": connection['p1'],
+                            "person2": connection['p2'],
+                            "relationship": connection['r'],
+                            "score": connection['r'].get('frequency', 1)
+                        })
+                
+                return results
+                
+            elif "most connected" in query_lower or "centrality" in query_lower:
+                # Get centrality analysis
+                centrality_query = f"""
+                MATCH (p:{person_label})-[r:COMMUNICATES_WITH]-(other:{person_label})
+                WITH p, count(DISTINCT other) as connections, count(r) as total_interactions
+                WHERE connections > 0
+                RETURN p.name as name, p.phone_number as phone, 
+                       connections, total_interactions
+                ORDER BY connections DESC, total_interactions DESC
+                LIMIT 10
+                """
+                
+                centrality_results = await neo4j_repo.execute_cypher(centrality_query)
+                
+                # Format results
+                results = []
+                for result in centrality_results:
+                    results.append({
+                        "type": "centrality",
+                        "person": result,
+                        "score": result.get('connections', 0)
+                    })
+                
+                return results
+                
+            elif "shortest path" in query_lower or "path between" in query_lower:
+                # This would need specific person IDs - for now return empty
+                # In a real implementation, you'd extract person names/numbers from the query
+                return []
+                
+            else:
+                # Default: return general network statistics
+                stats_query = f"""
+                MATCH (p:{person_label})
+                OPTIONAL MATCH (p)-[r:COMMUNICATES_WITH]-(other:{person_label})
+                RETURN count(DISTINCT p) as total_persons, 
+                       count(DISTINCT r) as total_relationships
+                """
+                
+                stats_results = await neo4j_repo.execute_cypher(stats_query)
+                
+                if stats_results:
+                    result = stats_results[0]
+                    return [{
+                        "type": "network_stats",
+                        "total_persons": result.get('total_persons', 0),
+                        "total_relationships": result.get('total_relationships', 0),
+                        "score": 1.0
+                    }]
+                
+                return []
+                
+        except Exception as e:
+            print(f"❌ Error in graph-only search: {e}")
             return []
 
     async def _execute_sql_search(self, query: str, analysis: Dict[str, Any], case_number: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -530,44 +699,62 @@ class AIService:
             AVAILABLE DATA:
             {data_summary}
 
-            INSTRUCTIONS:
-            1. Analyze the user's intent and provide the most appropriate response format
-            2. For COUNT queries: Provide detailed breakdowns by category (e.g., "Total X evidences found\nChat records: Y\nCall records: Z\nMedia Files: A\nContacts: B")
-            3. For LIST queries: Show items in a clean, organized format with ALL relevant details including:
-               - For chat records: Show sender, recipient, app, timestamp, AND the full message content
-               - For call records: Show caller, recipient, duration, timestamp, call type
-               - For media files: Show filename, size, type, timestamp, path
-               - For contacts: Show name, phone, email, timestamp
-            4. For SEARCH queries: Show specific items found with context and relevance
-            5. For ANALYSIS queries: Provide insights, patterns, and findings
-            6. For RELATIONSHIP queries: Explain connections and relationships
-            7. Use clear, professional language appropriate for forensic analysis
-            8. Focus on the most relevant information for the user's query
-            9. ALWAYS include full message content for chat records - this is crucial for investigators
-            10. Include all available details for each record type
-            11. If showing lists, limit to the most important items (max 10-15) but include full details
-            12. Don't show raw database fields or technical details unless specifically requested
-            13. If no relevant data found, say so clearly and suggest alternatives
-
-            RESPONSE FORMATTING GUIDELINES:
-            - For evidence counts: Use structured format with total and breakdown
-            - For lists: Use bullet points or numbered lists with complete information
-            - For chat records: Always include the full message content
-            - For analysis: Use clear paragraphs with insights
-            - For relationships: Use clear explanations of connections
-            - Always be comprehensive and include all relevant details
-            - Format each record as a clear, readable block with all available information
-
-            CRITICAL FORMATTING REQUIREMENTS:
-            - When showing chat records, format each record as: "1. App: [app_name] | From: [sender] | To: [receiver] | Time: [timestamp] | Message: [full_message]"
-            - When showing call records, format as: "1. From: [caller] | To: [receiver] | Duration: [duration] | Type: [call_type] | Time: [timestamp]"
-            - When showing media files, format as: "1. File: [filename] | Size: [size] | Type: [type] | Path: [path] | Time: [timestamp]"
-            - When showing contacts, format as: "1. Name: [name] | Phone: [phone] | Email: [email] | Time: [timestamp]"
-            - Use consistent formatting with pipe separators (|) for easy parsing
-            - Always include the full message content for chat records
-            - Use numbered lists (1., 2., 3., etc.) for multiple records
-            - Include all available fields for each record type
-            - Use the exact field names shown in the data (app_name, sender_number, receiver_number, etc.)
+            CRITICAL FORMATTING REQUIREMENTS - MUST BE FOLLOWED EXACTLY:
+            
+            FORMATTING RULE: ALL responses MUST use the structured data block format below. NO markdown, NO paragraphs, NO bullet points.
+            
+            REQUIRED FORMAT FOR ALL QUERY TYPES:
+            1. Start with a brief answer to the user's question (1-2 sentences max)
+            2. Then use ONLY the structured format below for ALL data
+            
+            STRUCTURED DATA FORMAT (MANDATORY):
+            - Use section headers: "CHAT RECORDS:", "CALL RECORDS:", "FILES:", "CONTACTS:", "SEARCH RESULTS:", "ANALYSIS RESULTS:"
+            - Use numbered lists: "1.", "2.", "3.", etc.
+            - Use pipe separators: "Field: [value] | Field: [value] | Field: [value]"
+            - Include ALL available fields for each record
+            
+            EXAMPLES OF REQUIRED FORMAT:
+            
+            For chat records:
+            CHAT RECORDS:
+            1. App: WhatsApp | From: +1234567890 | To: +0987654321 | Time: 2025-01-15 10:30:00 | Message: [full message content here]
+            2. App: Telegram | From: +1111111111 | To: +2222222222 | Time: 2025-01-15 11:45:00 | Message: [full message content here]
+            
+            For call records:
+            CALL RECORDS:
+            1. From: +1234567890 | To: +0987654321 | Duration: 120 seconds | Type: outgoing | Time: 2025-01-15 14:20:00
+            2. From: +1111111111 | To: +2222222222 | Duration: 45 seconds | Type: incoming | Time: 2025-01-15 15:30:00
+            
+            For files:
+            FILES:
+            1. File: document.pdf | Size: 2.5 MB | Type: PDF | Path: /storage/documents/ | Time: 2025-01-15 09:15:00
+            2. File: spreadsheet.xlsx | Size: 1.2 MB | Type: Excel | Path: /storage/files/ | Time: 2025-01-15 10:45:00
+            
+            For contacts:
+            CONTACTS:
+            1. Name: John Doe | Phone: +1234567890 | Email: john@example.com | Time: 2025-01-15 08:00:00
+            2. Name: Jane Smith | Phone: +0987654321 | Email: jane@example.com | Time: 2025-01-15 09:30:00
+            
+            For device information or other data:
+            DEVICE INFORMATION:
+            1. Phone Number: +1234567890 | Model: iPhone 15 Pro | Manufacturer: Apple | OS Version: iOS 17.1.1 | IMEI: 123456789012345
+            2. Extraction Date: 2025-01-15 18:20:00 | Extraction Tool: Cellebrite UFED | Case Officer: Agent Smith
+            
+            FORBIDDEN FORMATS (DO NOT USE):
+            - Markdown headers (###, ##, #)
+            - Bullet points (-, *, •)
+            - Plain paragraphs without structure
+            - Tables or other formatting
+            - Any format other than the structured format above
+            
+            MANDATORY RULES:
+            - ALWAYS use the structured format for ALL data types
+            - ALWAYS include section headers
+            - ALWAYS use numbered lists (1., 2., 3.)
+            - ALWAYS use pipe separators (|)
+            - ALWAYS include ALL available fields
+            - NEVER use markdown, paragraphs, or bullet points
+            - If no data found, say "No [data type] found" in the appropriate section
 
             Generate a response that directly answers the user's question using the available data:
             """
@@ -579,7 +766,11 @@ class AIService:
                 return self._generate_fallback_response(query, raw_data, analysis)
                 
         except Exception as e:
-            print(f"❌ Error generating intelligent response: {e}")
+            error_str = str(e)
+            if "quota" in error_str.lower() or "429" in error_str:
+                print(f"⚠️ Gemini API quota exceeded for intelligent response")
+            else:
+                print(f"❌ Error generating intelligent response: {e}")
             return self._generate_fallback_response(query, raw_data, analysis)
 
     
@@ -731,14 +922,60 @@ class AIService:
             vector_results = raw_data.get('vector_results', [])
             if vector_results:
                 summary_parts.append(f"\nSEMANTIC SEARCH RESULTS ({len(vector_results)} items):")
-                for i, result in enumerate(vector_results[:5], 1):  # Limit to 5 for summary
+                for i, result in enumerate(vector_results[:10], 1):  # Increased limit to 10
                     if isinstance(result, dict):
-                        content = result.get('payload', {}).get('content', result.get('content', str(result)))
-                        if content:
-                            summary_parts.append(f"  {i}. {str(content)[:200]}...")
+                        payload = result.get('payload', {})
+                        score = result.get('score', 0.0)
+                        suspicious_indicators = result.get('suspicious_indicators', [])
+                        
+                        # Determine risk level based on score
+                        if score >= 0.7:
+                            risk_level = "HIGH"
+                        elif score >= 0.4:
+                            risk_level = "MEDIUM"
+                        else:
+                            risk_level = "LOW"
+                        
+                        # Extract message content and metadata
+                        message_content = payload.get('message_content', '')
+                        app_name = payload.get('app_name', 'Unknown')
+                        sender_number = payload.get('sender_number', 'Unknown')
+                        receiver_number = payload.get('receiver_number', 'Unknown')
+                        timestamp = payload.get('timestamp', 'Unknown')
+                        
+                        # Format the result with risk level and full message content
+                        indicators_text = f" | Indicators: {', '.join(suspicious_indicators)}" if suspicious_indicators else ""
+                        summary_parts.append(f"  {i}. Risk: {risk_level} | Score: {score:.3f} | App: {app_name} | From: {sender_number} | To: {receiver_number} | Time: {timestamp} | Message: {message_content}{indicators_text}")
                 
-                if len(vector_results) > 5:
-                    summary_parts.append(f"  ... and {len(vector_results) - 5} more semantic results")
+                if len(vector_results) > 10:
+                    summary_parts.append(f"  ... and {len(vector_results) - 10} more semantic results")
+            
+            # Process graph results
+            graph_results = raw_data.get('graph_results', [])
+            if graph_results:
+                summary_parts.append(f"\nGRAPH SEARCH RESULTS ({len(graph_results)} items):")
+                for i, result in enumerate(graph_results[:5], 1):  # Limit to 5 for summary
+                    if isinstance(result, dict):
+                        result_type = result.get("type", "unknown")
+                        
+                        if result_type == "connection":
+                            person1 = result.get("person1", {})
+                            person2 = result.get("person2", {})
+                            relationship = result.get("relationship", {})
+                            summary_parts.append(f"  {i}. Connection: {person1.get('name', 'Unknown')} ↔ {person2.get('name', 'Unknown')} (Frequency: {relationship.get('frequency', 0)})")
+                        elif result_type == "centrality":
+                            person = result.get("person", {})
+                            connections = person.get('connections', 0)
+                            summary_parts.append(f"  {i}. Centrality: {person.get('name', 'Unknown')} - {connections} connections")
+                        elif result_type == "network_stats":
+                            total_persons = result.get("total_persons", 0)
+                            total_relationships = result.get("total_relationships", 0)
+                            summary_parts.append(f"  {i}. Network: {total_persons} persons, {total_relationships} relationships")
+                        else:
+                            summary_parts.append(f"  {i}. {str(result)[:150]}...")
+                
+                if len(graph_results) > 5:
+                    summary_parts.append(f"  ... and {len(graph_results) - 5} more graph results")
             
             return "\n".join(summary_parts) if summary_parts else "No data found"
             

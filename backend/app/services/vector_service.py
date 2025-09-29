@@ -34,7 +34,8 @@ class VectorService:
                 logger.info(f"Initializing Qdrant client with URL: {settings.qdrant_url}")
                 self.qdrant_client = QdrantClient(
                     url=settings.qdrant_url,
-                    api_key=settings.qdrant_api_key
+                    api_key=settings.qdrant_api_key,
+                    timeout=30  # 30 second timeout for cloud connections
                 )
                 # Test connection
                 collections = self.qdrant_client.get_collections()

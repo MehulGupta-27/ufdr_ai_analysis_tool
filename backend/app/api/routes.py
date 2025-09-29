@@ -242,25 +242,153 @@ async def get_analytics_summary():
 
 @router.get("/graph/network/{case_id}")
 async def get_communication_network(case_id: str):
-    """Get communication network from Neo4j for a case"""
-    
+    """Get communication network for a case.
+    Uses Neo4j when available with case-specific labels. Falls back to Postgres-only aggregation
+    so the UI can still render a basic graph if Neo4j is empty or unavailable.
+    """
     try:
-        # Get all persons for this case
-        persons = await neo4j_repo.find_nodes('Person', {'case_id': case_id})
-        person_ids = [p['id'] for p in persons]
-        
-        # Get communication network
-        network = await neo4j_repo.find_communication_network(person_ids)
-        
+        # Determine case-specific label pattern
+        case_info = case_manager.get_case_info(case_id)
+        if case_info:
+            safe_case_name = case_info.get("safe_case_name", case_id)
+        else:
+            safe_case_name = case_id
+
+        # Prefer case-specific labels created by the processor
+        person_label = f"Person_{safe_case_name}"
+        try:
+            persons = await neo4j_repo.find_nodes(person_label)
+        except Exception:
+            persons = []
+
+        # If not found, try generic Person label with case_id property (legacy path)
+        if not persons:
+            try:
+                persons = await neo4j_repo.find_nodes("Person", {"case_id": safe_case_name})
+            except Exception:
+                persons = []
+
+        person_ids = [p.get('id') for p in persons if p.get('id')]
+
+        network = []
+        if person_ids:
+            try:
+                network = await neo4j_repo.find_communication_network(person_ids)
+            except Exception:
+                network = []
+
+        # Fallback to Postgres-only graph if Neo4j has no data
+        if not network:
+            fallback = _build_fallback_network(case_id)
+            return JSONResponse(content={
+                "case_id": case_id,
+                "network": fallback.get("network", []),
+                "total_nodes": fallback.get("total_nodes", 0),
+                "total_relationships": fallback.get("total_relationships", 0),
+                "message": "Returned fallback network built from case data"
+            })
+
         return JSONResponse(content={
             "case_id": case_id,
             "network": network,
             "total_nodes": len(persons),
             "total_relationships": len(network)
         })
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting communication network: {str(e)}")
+
+# --- Fallback network construction (Postgres-only) ---
+def _build_fallback_network(case_number: str) -> Dict[str, Any]:
+    from app.services.case_manager import case_manager
+    from app.models.database import get_db
+    from sqlalchemy import text
+    
+    case_info = case_manager.get_case_info(case_number)
+    if not case_info:
+        return {"network": [], "total_nodes": 0, "total_relationships": 0}
+    safe_case_name = case_info["safe_case_name"]
+    schema = f"case_{safe_case_name}"
+    db = next(get_db())
+    try:
+        persons = {}
+        contacts_q = text(f"SELECT COALESCE(name,'') as name, phone_numbers FROM {schema}.contacts")
+        for row in db.execute(contacts_q):
+            name = row.name or ''
+            nums = row.phone_numbers or []
+            if isinstance(nums, str):
+                import json
+                try:
+                    nums = json.loads(nums)
+                except Exception:
+                    nums = []
+            for phone in nums:
+                if phone and phone not in persons:
+                    persons[phone] = {
+                        'id': f'{safe_case_name}_person_{phone}',
+                        'name': name or phone,
+                        'phone_number': phone
+                    }
+
+        def ensure(phone: str):
+            if phone and phone not in persons:
+                persons[phone] = {
+                    'id': f'{safe_case_name}_person_{phone}',
+                    'name': phone,
+                    'phone_number': phone
+                }
+
+        chats_q = text(f"SELECT sender_number, receiver_number FROM {schema}.chat_records")
+        for row in db.execute(chats_q):
+            ensure(row.sender_number)
+            ensure(row.receiver_number)
+
+        calls_q = text(f"SELECT caller_number, receiver_number FROM {schema}.call_records")
+        for row in db.execute(calls_q):
+            ensure(row.caller_number)
+            ensure(row.receiver_number)
+
+        pair_to_stats = {}
+        agg_chats_q = text(
+            f"SELECT sender_number, receiver_number, COUNT(*) as c FROM {schema}.chat_records "
+            "WHERE sender_number IS NOT NULL AND receiver_number IS NOT NULL GROUP BY sender_number, receiver_number"
+        )
+        for row in db.execute(agg_chats_q):
+            pair = tuple(sorted([row.sender_number, row.receiver_number]))
+            stats = pair_to_stats.setdefault(pair, {"message_count": 0, "call_count": 0, "frequency": 0})
+            stats["message_count"] += int(row.c or 0)
+            stats["frequency"] += int(row.c or 0)
+
+        agg_calls_q = text(
+            f"SELECT caller_number, receiver_number, COUNT(*) as c FROM {schema}.call_records "
+            "WHERE caller_number IS NOT NULL AND receiver_number IS NOT NULL GROUP BY caller_number, receiver_number"
+        )
+        for row in db.execute(agg_calls_q):
+            pair = tuple(sorted([row.caller_number, row.receiver_number]))
+            stats = pair_to_stats.setdefault(pair, {"message_count": 0, "call_count": 0, "frequency": 0})
+            stats["call_count"] += int(row.c or 0)
+            stats["frequency"] += int(row.c or 0)
+
+        network = []
+        for (a, b), stats in pair_to_stats.items():
+            if not a or not b:
+                continue
+            p1 = persons.get(a, {'id': f'{safe_case_name}_person_{a}', 'name': a, 'phone_number': a})
+            p2 = persons.get(b, {'id': f'{safe_case_name}_person_{b}', 'name': b, 'phone_number': b})
+            rel = {
+                'type': 'COMMUNICATES_WITH',
+                'frequency': stats.get('frequency', 0),
+                'message_count': stats.get('message_count', 0),
+                'call_count': stats.get('call_count', 0),
+                'communication_strength': min(1.0, (stats.get('message_count', 0) * 0.1) + (stats.get('call_count', 0) * 0.3))
+            }
+            network.append({'p1': p1, 'p2': p2, 'r': rel})
+
+        return {'network': network, 'total_nodes': len(persons), 'total_relationships': len(network)}
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 @router.get("/graph/centrality")
 async def get_centrality_analysis():

@@ -17,7 +17,7 @@
 }
 
 .header-icon {
-  color: #ff6b35;
+  color: #007bff;
 }
 
 .header-info h1 {
@@ -98,7 +98,7 @@
 }
 
 .message.user .message-avatar {
-  background: linear-gradient(135deg, #ff6b35 0%, #ff8c5a 100%);
+  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
   color: white;
 }
 
@@ -127,7 +127,7 @@
 }
 
 .message.user .message-bubble {
-  background: linear-gradient(135deg, #ff6b35 0%, #ff8c5a 100%);
+  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
   color: white;
   border: none;
 }
@@ -215,9 +215,9 @@
 }
 
 .suggestion-btn:hover {
-  border-color: #ff6b35;
-  background: #fff5f2;
-  color: #ff6b35;
+  border-color: #007bff;
+  background: #e3f2fd;
+  color: #007bff;
 }
 
 .chat-input-form {
@@ -244,7 +244,7 @@
 }
 
 .chat-input:focus {
-  border-color: #ff6b35;
+  border-color: #007bff;
 }
 
 .chat-input:disabled {
@@ -255,7 +255,7 @@
 .send-button {
   width: 48px;
   height: 48px;
-  background: linear-gradient(135deg, #ff6b35 0%, #ff8c5a 100%);
+  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
   border: none;
   border-radius: 50%;
   color: white;
@@ -269,7 +269,7 @@
 
 .send-button:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
 }
 
 .send-button:disabled {
@@ -324,8 +324,8 @@
 }
 
 .record-block:hover {
-  border-color: #ff6b35;
-  box-shadow: 0 2px 8px rgba(255, 107, 53, 0.1);
+  border-color: #007bff;
+  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.1);
 }
 
 .record-header {
@@ -349,7 +349,7 @@
   width: 32px;
   height: 32px;
   border-radius: 6px;
-  background: #ff6b35;
+  background: #007bff;
   color: white;
   margin-right: 12px;
   flex-shrink: 0;
@@ -378,7 +378,7 @@
 }
 
 .more-indicator {
-  color: #ff6b35;
+  color: #007bff;
   font-style: italic;
   font-size: 12px;
 }
@@ -391,7 +391,7 @@
 }
 
 .record-header:hover .expand-icon {
-  color: #ff6b35;
+  color: #007bff;
 }
 
 .record-details {
@@ -649,6 +649,76 @@
   word-break: break-word;
 }
 
+/* Record Type Group Styling */
+.record-type-group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.record-type-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: 8px;
+  border-left: 4px solid #007bff;
+  margin-bottom: 8px;
+}
+
+.record-type-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+.record-count {
+  font-size: 14px;
+  color: white;
+  background: #007bff;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+/* Search Results Styling */
+.record-type-group[data-type="search_results"] .record-type-header {
+  border-left-color: #28a745;
+}
+
+.record-type-group[data-type="search_results"] .record-count {
+  background: #28a745;
+}
+
+/* Analysis Results Styling */
+.record-type-group[data-type="analysis_results"] .record-type-header {
+  border-left-color: #ffc107;
+}
+
+.record-type-group[data-type="analysis_results"] .record-count {
+  background: #ffc107;
+  color: #333;
+}
+
+/* Enhanced field styling for new data types */
+.field-value.relevance,
+.field-value.confidence {
+  background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%);
+  border-left-color: #28a745;
+  font-weight: 600;
+}
+
+.field-value.evidence-id,
+.field-value.evidence {
+  background: linear-gradient(135deg, #fff3cd 0%, #fef7e0 100%);
+  border-left-color: #ffc107;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+}
+
 /* Formatted text styling */
 .formatted-line {
   margin: 4px 0;
@@ -662,4 +732,69 @@
 .formatted-line em {
   font-style: italic;
   color: #666;
+}
+
+/* Risk Level Styling */
+.risk-level {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.risk-level.risk-high {
+  background: linear-gradient(135deg, #ff6b6b 0%, #ff5252 100%);
+  color: white;
+  box-shadow: 0 2px 4px rgba(255, 107, 107, 0.3);
+}
+
+.risk-level.risk-medium {
+  background: linear-gradient(135deg, #ffa726 0%, #ff9800 100%);
+  color: white;
+  box-shadow: 0 2px 4px rgba(255, 167, 38, 0.3);
+}
+
+.risk-level.risk-low {
+  background: linear-gradient(135deg, #66bb6a 0%, #4caf50 100%);
+  color: white;
+  box-shadow: 0 2px 4px rgba(102, 187, 106, 0.3);
+}
+
+/* Enhanced field styling for risk levels */
+.field-detail .field-value .risk-level {
+  margin-left: 8px;
+}
+
+/* Search results specific styling */
+.record-block[data-type="search_results"] .record-header {
+  border-left: 4px solid #007bff;
+}
+
+.record-block[data-type="search_results"] .record-header:hover {
+  background: linear-gradient(135deg, #f8f9ff 0%, #e3f2fd 100%);
+}
+
+/* Message content styling for search results */
+.record-block[data-type="search_results"] .message-content {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 8px;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Suspicious indicators styling */
+.field-detail .field-value:has(.suspicious-indicators) {
+  background: #fff3cd;
+  border-left: 3px solid #ffc107;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin: 4px 0;
 }

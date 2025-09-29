@@ -16,7 +16,7 @@
 }
 
 .header-icon {
-  color: #ff6b35;
+  color: #007bff;
 }
 
 .header-info h1 {
@@ -88,7 +88,7 @@
 }
 
 .action-icon {
-  color: #ff6b35;
+  color: #007bff;
   flex-shrink: 0;
   margin-top: 2px;
 }
@@ -132,7 +132,7 @@
 }
 
 .summary-icon {
-  color: #ff6b35;
+  color: #007bff;
 }
 
 .summary-header h2 {
@@ -159,7 +159,7 @@
 .stat-number {
   font-size: 28px;
   font-weight: 700;
-  color: #ff6b35;
+  color: #007bff;
   margin-bottom: 4px;
 }
 
@@ -230,8 +230,8 @@
 
 .risk-reason {
   font-size: 12px;
-  background: rgba(255, 107, 53, 0.1);
-  color: #ff6b35;
+  background: rgba(0, 123, 255, 0.1);
+  color: #007bff;
   padding: 2px 8px;
   border-radius: 12px;
   font-weight: 500;
@@ -256,8 +256,8 @@
 
 .finding-item {
   padding: 16px;
-  background: #fff5f2;
-  border: 1px solid #ffe0d6;
+  background: #e3f2fd;
+  border: 1px solid #bbdefb;
   border-radius: 8px;
 }
 
@@ -277,8 +277,8 @@
 
 .finding-evidence {
   font-size: 13px;
-  color: #ff6b35;
-  background: rgba(255, 107, 53, 0.1);
+  color: #007bff;
+  background: rgba(0, 123, 255, 0.1);
   padding: 8px 12px;
   border-radius: 6px;
 }

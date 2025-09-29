@@ -450,9 +450,47 @@ class AIService:
                 )
             else:
                 print(f"🔍 Standard semantic search in collection: {collection_name}")
-                results = await vector_service.search_case_data(
+                # Dynamically narrow result types based on the user's intent
+                # Prefer chats for message-style queries, calls for call-style queries, etc.
+                query_lower = query.lower()
+
+                inferred_types = []
+
+                # Prefer chat messages when user asks about messages/chats/apps
+                chat_indicators = [
+                    "message", "messages", "chat", "chats", "whatsapp", "telegram",
+                    "signal", "imessage", "sms"
+                ]
+                if any(word in query_lower for word in chat_indicators):
+                    inferred_types.append("chat_record")
+
+                # Prefer calls when user asks about calls/phone calls
+                call_indicators = ["call", "calls", "phone call", "phone calls"]
+                if any(word in query_lower for word in call_indicators):
+                    inferred_types.append("call_record")
+
+                # Prefer contacts when user mentions contacts/people
+                contact_indicators = ["contact", "contacts", "people", "person"]
+                if any(word in query_lower for word in contact_indicators):
+                    inferred_types.append("contact")
+
+                # Prefer files/media when user explicitly mentions files/media types
+                media_indicators = [
+                    "file", "files", "media", "image", "images", "photo", "photos",
+                    "video", "videos", "audio", "document", "pdf", "doc", "xlsx"
+                ]
+                if any(word in query_lower for word in media_indicators):
+                    inferred_types.append("media_file")
+
+                # If nothing inferred, default to non-media records to avoid noisy file hits
+                if not inferred_types:
+                    inferred_types = ["chat_record", "call_record", "contact"]
+
+                # Execute filtered semantic search in the case collection
+                results = await vector_service.search_case_collection(
                     query=query,
                     collection_name=collection_name,
+                    data_types=inferred_types,
                     limit=20
                 )
             

@@ -6,7 +6,8 @@ import {
   FileText, 
   Menu,
   Shield,
-  ChevronLeft
+  ChevronLeft,
+  Network
 } from 'lucide-react';
 import './Sidebar.css';
 
@@ -25,6 +26,13 @@ const Sidebar = ({ isOpen, currentCase, onToggle }) => {
       icon: MessageSquare,
       label: 'AI Analyzer',
       description: 'Chat and query analysis',
+      disabled: !currentCase
+    },
+    {
+      path: '/connections',
+      icon: Network,
+      label: 'Connection Graph',
+      description: 'View communication networks',
       disabled: !currentCase
     },
     {

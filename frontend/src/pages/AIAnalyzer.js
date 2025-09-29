@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, MessageSquare, Bot, User, AlertCircle, Loader, ChevronDown, ChevronRight, Phone, MessageCircle, FileText, Users, Clock, Hash } from 'lucide-react';
+import { Send, MessageSquare, Bot, User, AlertCircle, Loader, ChevronDown, ChevronRight, Phone, MessageCircle, FileText, Users, Clock, Hash, Smartphone, Mail, Calendar, MapPin, Tag, Shield, Search, BarChart3, Database, Key, Eye } from 'lucide-react';
 import axios from 'axios';
+import { useApp } from '../context/AppContext';
 import './AIAnalyzer.css';
 
 // Component for expandable record blocks
@@ -17,6 +18,10 @@ const RecordBlock = ({ record, index, type }) => {
         return <FileText size={16} />;
       case 'contacts':
         return <Users size={16} />;
+      case 'search_results':
+        return <Search size={16} />;
+      case 'analysis_results':
+        return <AlertCircle size={16} />;
       default:
         return <Hash size={16} />;
     }
@@ -29,12 +34,106 @@ const RecordBlock = ({ record, index, type }) => {
       case 'call_records':
         return 'Call Record';
       case 'media_files':
-        return 'Media File';
+        return 'File';
       case 'contacts':
         return 'Contact';
+      case 'search_results':
+        return 'Search Result';
+      case 'analysis_results':
+        return 'Analysis Result';
+      case 'device_info':
+        return 'Device Info';
       default:
         return 'Record';
     }
+  };
+
+  const getFieldIcon = (fieldLabel) => {
+    const label = fieldLabel.toLowerCase();
+    
+    // Time-related fields
+    if (label.includes('time') || label.includes('date') || label.includes('timestamp')) {
+      return <Clock size={14} />;
+    }
+    
+    // Phone/communication fields
+    if (label.includes('phone') || label.includes('from') || label.includes('to') || 
+        label.includes('caller') || label.includes('receiver') || label.includes('sender')) {
+      return <Phone size={14} />;
+    }
+    
+    // App/platform fields
+    if (label.includes('app') || label.includes('application') || label.includes('platform')) {
+      return <Smartphone size={14} />;
+    }
+    
+    // Email fields
+    if (label.includes('email') || label.includes('mail')) {
+      return <Mail size={14} />;
+    }
+    
+    // Name/contact fields
+    if (label.includes('name') || label.includes('contact')) {
+      return <User size={14} />;
+    }
+    
+    // File-related fields
+    if (label.includes('file') || label.includes('filename') || label.includes('path')) {
+      return <FileText size={14} />;
+    }
+    
+    // Size/capacity fields
+    if (label.includes('size') || label.includes('capacity')) {
+      return <Database size={14} />;
+    }
+    
+    // Type/category fields
+    if (label.includes('type') || label.includes('category')) {
+      return <Tag size={14} />;
+    }
+    
+    // Duration fields
+    if (label.includes('duration') || label.includes('length')) {
+      return <Clock size={14} />;
+    }
+    
+    // Message/content fields
+    if (label.includes('message') || label.includes('content') || label.includes('text')) {
+      return <MessageCircle size={14} />;
+    }
+    
+    // Relevance/score fields
+    if (label.includes('relevance') || label.includes('score') || label.includes('confidence')) {
+      return <BarChart3 size={14} />;
+    }
+    
+    // Evidence/ID fields
+    if (label.includes('evidence') || label.includes('id') || label.includes('reference')) {
+      return <Key size={14} />;
+    }
+    
+    // Finding/analysis fields
+    if (label.includes('finding') || label.includes('analysis') || label.includes('description')) {
+      return <Eye size={14} />;
+    }
+    
+    // Security/risk fields
+    if (label.includes('risk') || label.includes('security') || label.includes('threat')) {
+      return <Shield size={14} />;
+    }
+    
+    // Search fields
+    if (label.includes('search') || label.includes('query')) {
+      return <Search size={14} />;
+    }
+    
+    // Location fields
+    if (label.includes('location') || label.includes('address') || label.includes('path')) {
+      return <MapPin size={14} />;
+    }
+    
+    // Default icon for unknown fields
+    return <Hash size={14} />;
   };
 
   const formatRecordData = (record) => {
@@ -83,6 +182,72 @@ const RecordBlock = ({ record, index, type }) => {
       fields.push({ label: 'Email', value: record.contact_email });
     }
     
+    // Search results specific fields
+    if (type === 'search_results' && record.risk_level) {
+      fields.push({ label: 'Risk Level', value: record.risk_level, isRiskLevel: true });
+    }
+    if (type === 'search_results' && record.relevance_score) {
+      fields.push({ label: 'Score', value: `${(record.relevance_score * 100).toFixed(1)}%` });
+    }
+    if (type === 'search_results' && record.suspicious_indicators) {
+      fields.push({ label: 'Suspicious Indicators', value: record.suspicious_indicators });
+    }
+    if (type === 'search_results' && record.evidence_id) {
+      fields.push({ label: 'Evidence ID', value: record.evidence_id });
+    }
+    if (type === 'search_results' && record.content) {
+      fields.push({ label: 'Content', value: record.content, isMessage: true });
+    }
+    if (type === 'search_results' && record.message_content) {
+      fields.push({ label: 'Message', value: record.message_content, isMessage: true });
+    }
+    
+    // Analysis results specific fields
+    if (type === 'analysis_results' && record.confidence) {
+      fields.push({ label: 'Confidence', value: `${(record.confidence * 100).toFixed(1)}%` });
+    }
+    if (type === 'analysis_results' && record.finding) {
+      fields.push({ label: 'Finding', value: record.finding, isMessage: true });
+    }
+    if (type === 'analysis_results' && record.evidence) {
+      fields.push({ label: 'Evidence', value: record.evidence });
+    }
+    
+    // Device info specific fields
+    if (type === 'device_info' && record.model) {
+      fields.push({ label: 'Model', value: record.model });
+    }
+    if (type === 'device_info' && record.manufacturer) {
+      fields.push({ label: 'Manufacturer', value: record.manufacturer });
+    }
+    if (type === 'device_info' && record.os_version) {
+      fields.push({ label: 'OS Version', value: record.os_version });
+    }
+    if (type === 'device_info' && record.imei) {
+      fields.push({ label: 'IMEI', value: record.imei });
+    }
+    if (type === 'device_info' && record.serial_number) {
+      fields.push({ label: 'Serial Number', value: record.serial_number });
+    }
+    if (type === 'device_info' && record.extraction_date) {
+      fields.push({ label: 'Extraction Date', value: record.extraction_date });
+    }
+    if (type === 'device_info' && record.extraction_tool) {
+      fields.push({ label: 'Extraction Tool', value: record.extraction_tool });
+    }
+    if (type === 'device_info' && record.case_officer) {
+      fields.push({ label: 'Case Officer', value: record.case_officer });
+    }
+    
+    // Generic fallback: include any additional parsed fields so design stays consistent
+    if (Array.isArray(record._otherFields)) {
+      record._otherFields.forEach((kv) => {
+        if (kv && kv.label && kv.value) {
+          fields.push({ label: kv.label, value: kv.value });
+        }
+      });
+    }
+    
     return fields;
   };
 
@@ -125,7 +290,7 @@ const RecordBlock = ({ record, index, type }) => {
           {recordData.map((field, idx) => (
             <div key={idx} className={`field-detail ${field.isMessage ? 'message-field' : ''}`}>
               <div className="field-label">
-                <Clock size={14} />
+                {getFieldIcon(field.label)}
                 {field.label}:
               </div>
               <div className="field-value">
@@ -133,6 +298,10 @@ const RecordBlock = ({ record, index, type }) => {
                   <div className="message-content">
                     {field.value}
                   </div>
+                ) : field.isRiskLevel ? (
+                  <span className={`risk-level risk-${field.value.toLowerCase()}`}>
+                    {field.value}
+                  </span>
                 ) : (
                   field.value
                 )}
@@ -159,18 +328,34 @@ const StructuredDataRenderer = ({ content }) => {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       
-      // Check for record type headers
-      if (line.includes('CHAT RECORDS') || line.includes('Chat records') || line.includes('CHAT_RECORDS')) {
+      // Enhanced record type header detection for all data types
+      if (line.includes('CHAT RECORDS') || line.includes('Chat records') || line.includes('CHAT_RECORDS') || 
+          line.includes('Chat Records') || line.includes('chat records')) {
         currentType = 'chat_records';
         continue;
-      } else if (line.includes('CALL RECORDS') || line.includes('Call records') || line.includes('CALL_RECORDS')) {
+      } else if (line.includes('CALL RECORDS') || line.includes('Call records') || line.includes('CALL_RECORDS') || 
+                 line.includes('Call Records') || line.includes('call records')) {
         currentType = 'call_records';
         continue;
-      } else if (line.includes('MEDIA FILES') || line.includes('Media files') || line.includes('MEDIA_FILES')) {
+      } else if (line.includes('MEDIA FILES') || line.includes('Media files') || line.includes('MEDIA_FILES') || 
+                 line.includes('Media Files') || line.includes('media files') || line.includes('FILES') || 
+                 line.includes('Files') || line.includes('files')) {
         currentType = 'media_files';
         continue;
-      } else if (line.includes('CONTACTS') || line.includes('Contacts')) {
+      } else if (line.includes('CONTACTS') || line.includes('Contacts') || line.includes('contacts')) {
         currentType = 'contacts';
+        continue;
+      } else if (line.includes('SEARCH RESULTS') || line.includes('Search results') || line.includes('SEARCH_RESULTS') || 
+                 line.includes('Search Results') || line.includes('search results')) {
+        currentType = 'search_results';
+        continue;
+      } else if (line.includes('ANALYSIS RESULTS') || line.includes('Analysis results') || line.includes('ANALYSIS_RESULTS') || 
+                 line.includes('Analysis Results') || line.includes('analysis results')) {
+        currentType = 'analysis_results';
+        continue;
+      } else if (line.includes('DEVICE INFORMATION') || line.includes('Device information') || line.includes('DEVICE_INFO') || 
+                 line.includes('Device Information') || line.includes('device information')) {
+        currentType = 'device_info';
         continue;
       }
       
@@ -188,16 +373,81 @@ const StructuredDataRenderer = ({ content }) => {
         if (recordMatch) break;
       }
 
-      if (recordMatch && currentType) {
+      if (recordMatch) {
         const recordText = recordMatch[2];
         const record = parseRecordText(recordText, currentType);
         if (Object.keys(record).length > 0) {
-          records.push({ ...record, type: currentType, index: recordIndex++ });
+          // Determine record type dynamically based on content
+          const detectedType = detectRecordType(record, currentType);
+          
+          // If we detected a different type than the current section, update currentType
+          // This handles cases where the AI doesn't include proper section headers
+          if (detectedType !== currentType && detectedType !== 'unknown') {
+            currentType = detectedType;
+          }
+          
+          records.push({ ...record, type: detectedType, index: recordIndex++ });
         }
       }
     }
     
     return records;
+  };
+
+  // Dynamic record type detection based on content
+  const detectRecordType = (record, fallbackType) => {
+    // If we have a specific type from headers, use it
+    if (fallbackType) {
+      return fallbackType;
+    }
+    
+    // Enhanced detection based on field presence and content patterns
+    // Priority order: search_results > analysis_results > media_files > call_records > chat_records > contacts
+    
+    // Search results detection (highest priority)
+    if (record.relevance_score || record.evidence_id || record.search_score || 
+        record.app && record.relevance) {
+      return 'search_results';
+    }
+    
+    // Analysis results detection
+    if (record.confidence || record.finding || record.analysis_score || 
+        record.description && record.confidence) {
+      return 'analysis_results';
+    }
+    
+    // Media files detection
+    if (record.file_name || record.file_size || record.file_type || record.file_path || 
+        record.filename || record.file_size || record.mime_type) {
+      return 'media_files';
+    }
+    
+    // Call records detection
+    if (record.call_duration || record.call_type || record.duration || 
+        (record.caller_number && record.receiver_number && !record.file_name && !record.message_content)) {
+      return 'call_records';
+    }
+    
+    // Chat records detection
+    if (record.message_content || record.content || record.text || record.app_name || 
+        record.application || (record.sender_number && record.receiver_number && record.message_content)) {
+      return 'chat_records';
+    }
+    
+    // Contacts detection
+    if (record.contact_name || record.name || record.phone_number || record.contact_email || 
+        record.email || (record.phone && record.name)) {
+      return 'contacts';
+    }
+    
+    // Device info detection
+    if (record.phone_number && (record.model || record.manufacturer || record.imei || 
+        record.serial_number || record.os_version || record.extraction_date || record.extraction_tool)) {
+      return 'device_info';
+    }
+    
+    // Default fallback
+    return 'unknown';
   };
 
   const parseRecordText = (text, type) => {
@@ -292,6 +542,85 @@ const StructuredDataRenderer = ({ content }) => {
           case 'contact_email':
             record.contact_email = value;
             break;
+          
+          // Search results specific
+          case 'relevance':
+          case 'relevance_score':
+          case 'score':
+            record.relevance_score = parseFloat(value.replace('%', '')) / 100;
+            break;
+          case 'risk':
+          case 'risk_level':
+            record.risk_level = value;
+            break;
+          case 'indicators':
+          case 'suspicious_indicators':
+            record.suspicious_indicators = value;
+            break;
+          case 'evidence_id':
+          case 'evidence':
+            record.evidence_id = value;
+            break;
+          case 'search_score':
+            record.search_score = parseFloat(value);
+            break;
+          
+          // Analysis results specific
+          case 'confidence':
+          case 'confidence_score':
+            record.confidence = parseFloat(value.replace('%', '')) / 100;
+            break;
+          case 'finding':
+          case 'description':
+            record.finding = value;
+            break;
+          case 'analysis_score':
+            record.analysis_score = parseFloat(value);
+            break;
+          case 'references':
+            record.evidence = value;
+            break;
+          
+          // Device info specific
+          case 'model':
+          case 'device_model':
+            record.model = value;
+            break;
+          case 'manufacturer':
+          case 'device_manufacturer':
+            record.manufacturer = value;
+            break;
+          case 'os_version':
+          case 'operating_system':
+            record.os_version = value;
+            break;
+          case 'imei':
+          case 'device_imei':
+            record.imei = value;
+            break;
+          case 'serial_number':
+          case 'device_serial':
+            record.serial_number = value;
+            break;
+          case 'extraction_date':
+          case 'extraction_time':
+            record.extraction_date = value;
+            break;
+          case 'extraction_tool':
+          case 'tool_used':
+            record.extraction_tool = value;
+            break;
+          case 'case_officer':
+          case 'investigator':
+            record.case_officer = value;
+            break;
+          default:
+            // Preserve unknown fields for consistent rendering
+            if (!record._otherFields) record._otherFields = [];
+            // Capitalize first letter for label display
+            const label = key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ');
+            record._otherFields.push({ label, value });
+            break;
         }
       }
     }
@@ -329,27 +658,36 @@ const StructuredDataRenderer = ({ content }) => {
                const recordText = recordMatch[2];
                const record = parseRecordText(recordText, 'unknown');
                
-               // Determine record type based on available fields
-               let recordType = 'unknown';
+               // Use dynamic record type detection
+               const recordType = detectRecordType(record, null);
                let icon = <Hash size={16} />;
                let typeLabel = 'Record';
                
-               if (record.message_content || record.app_name) {
-                 recordType = 'chat_records';
-                 icon = <MessageCircle size={16} />;
-                 typeLabel = 'Chat Record';
-               } else if (record.call_duration || record.call_type) {
-                 recordType = 'call_records';
-                 icon = <Phone size={16} />;
-                 typeLabel = 'Call Record';
-               } else if (record.file_name || record.file_size) {
-                 recordType = 'media_files';
-                 icon = <FileText size={16} />;
-                 typeLabel = 'Media File';
-               } else if (record.contact_name || record.phone_number) {
-                 recordType = 'contacts';
-                 icon = <Users size={16} />;
-                 typeLabel = 'Contact';
+               // Set icon and label based on detected type
+               switch (recordType) {
+                 case 'chat_records':
+                   icon = <MessageCircle size={16} />;
+                   typeLabel = 'Chat Record';
+                   break;
+                 case 'call_records':
+                   icon = <Phone size={16} />;
+                   typeLabel = 'Call Record';
+                   break;
+                 case 'media_files':
+                   icon = <FileText size={16} />;
+                   typeLabel = 'File';
+                   break;
+                 case 'contacts':
+                   icon = <Users size={16} />;
+                   typeLabel = 'Contact';
+                   break;
+                 case 'device_info':
+                   icon = <Smartphone size={16} />;
+                   typeLabel = 'Device Info';
+                   break;
+                 default:
+                   icon = <Hash size={16} />;
+                   typeLabel = 'Record';
                }
                
                if (Object.keys(record).length > 0) {
@@ -387,25 +725,61 @@ const StructuredDataRenderer = ({ content }) => {
     );
   }
 
+  // Group records by type for better organization
+  const groupedRecords = records.reduce((groups, record, index) => {
+    const type = record.type || 'unknown';
+    if (!groups[type]) {
+      groups[type] = [];
+    }
+    groups[type].push({ ...record, index });
+    return groups;
+  }, {});
+
+  // Get type labels for display
+  const getTypeLabel = (type) => {
+    switch (type) {
+      case 'chat_records': return 'Chat Records';
+      case 'call_records': return 'Call Records';
+      case 'media_files': return 'Files';
+      case 'contacts': return 'Contacts';
+      case 'search_results': return 'Search Results';
+      case 'analysis_results': return 'Analysis Results';
+      case 'device_info': return 'Device Information';
+      default: return 'Records';
+    }
+  };
+
   return (
     <div className="structured-data">
-      {records.map((record, index) => (
-        <RecordBlock
-          key={index}
-          record={record}
-          index={index}
-          type={record.type}
-        />
+      {Object.entries(groupedRecords).map(([type, typeRecords]) => (
+        <div key={type} className="record-type-group" data-type={type}>
+          <div className="record-type-header">
+            <h3>{getTypeLabel(type)}</h3>
+            <span className="record-count">({typeRecords.length} items)</span>
+          </div>
+          {typeRecords.map((record, index) => (
+            <RecordBlock
+              key={`${type}-${index}`}
+              record={record}
+              index={index}
+              type={record.type}
+            />
+          ))}
+        </div>
       ))}
     </div>
   );
 };
 
 const AIAnalyzer = ({ currentCase }) => {
-  const [messages, setMessages] = useState([]);
+  const { state, actions } = useApp();
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
+  
+  // Get messages for current case from global state
+  const messages = currentCase ? (state.chatMessages[currentCase.case_number] || []) : [];
+  const ongoingQuery = currentCase ? state.ongoingQueries[currentCase.case_number] : null;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -416,25 +790,32 @@ const AIAnalyzer = ({ currentCase }) => {
   }, [messages]);
 
   useEffect(() => {
-    if (currentCase) {
-      setMessages([
-        {
+    if (currentCase && (!messages || messages.length === 0)) {
+      // Small delay to ensure any clearing operations complete first
+      const timer = setTimeout(() => {
+        const welcomeMessage = {
           id: 1,
           type: 'bot',
           content: `Welcome! I'm ready to analyze case ${currentCase.case_number}. You can ask me questions like:
-          
-• "Find WhatsApp messages about meetings"
-• "Who sent verification codes?"
+        
+• "How many evidences are total found"
+• "Show me all the Calls made"
+• "Find WhatsApp messages about Money"
+• "Whom he called most frequently"
+• "What is the IMEI no of the device"
 • "Show me suspicious communications"
 • "Analyze communication patterns"
 • "Find connections between contacts"
 
 What would you like to investigate?`,
           timestamp: new Date()
-        }
-      ]);
+        };
+        actions.setChatMessages(currentCase.case_number, [welcomeMessage]);
+      }, 100);
+
+      return () => clearTimeout(timer);
     }
-  }, [currentCase]);
+  }, [currentCase, messages, actions]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -447,7 +828,12 @@ What would you like to investigate?`,
       timestamp: new Date()
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    // Add user message to global state
+    actions.addChatMessage(currentCase.case_number, userMessage);
+    
+    // Set ongoing query
+    actions.setOngoingQuery(currentCase.case_number, inputValue);
+    
     setInputValue('');
     setIsLoading(true);
 
@@ -468,7 +854,8 @@ What would you like to investigate?`,
         success: response.data.success
       };
 
-      setMessages(prev => [...prev, botMessage]);
+      // Add bot message to global state
+      actions.addChatMessage(currentCase.case_number, botMessage);
     } catch (error) {
       const errorMessage = {
         id: Date.now() + 1,
@@ -478,19 +865,56 @@ What would you like to investigate?`,
         isError: true
       };
 
-      setMessages(prev => [...prev, errorMessage]);
+      // Add error message to global state
+      actions.addChatMessage(currentCase.case_number, errorMessage);
     } finally {
       setIsLoading(false);
+      // Clear ongoing query
+      actions.clearOngoingQuery(currentCase.case_number);
     }
   };
 
   const formatTime = (timestamp) => {
-    return timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    try {
+      // Handle different timestamp formats
+      let date;
+      
+      if (timestamp instanceof Date) {
+        date = timestamp;
+      } else if (typeof timestamp === 'string') {
+        // Try to parse the string as a date
+        date = new Date(timestamp);
+        
+        // If parsing failed, return the original string
+        if (isNaN(date.getTime())) {
+          return timestamp;
+        }
+      } else if (timestamp && typeof timestamp === 'object' && timestamp.constructor === Date) {
+        // Handle edge case where it might be a Date object but not instanceof Date
+        date = timestamp;
+      } else {
+        // If it's not a Date or string, return a fallback
+        return 'Invalid time';
+      }
+      
+      // Final safety check
+      if (!date || isNaN(date.getTime())) {
+        return 'Invalid time';
+      }
+      
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (error) {
+      console.warn('Error formatting time:', error, 'timestamp:', timestamp);
+      return 'Invalid time';
+    }
   };
 
   const suggestedQueries = [
-    "Find WhatsApp messages about meetings",
-    "Who sent verification codes?",
+    "How many evidences are total found",
+    "Show me all the Calls made",
+    "Find WhatsApp messages about Money",
+    "Whom he called most frequently",
+    "What is the IMEI no of the device",
     "Show me suspicious communications",
     "Analyze communication patterns",
     "Find connections between contacts"
@@ -554,7 +978,7 @@ What would you like to investigate?`,
             </div>
           ))}
           
-          {isLoading && (
+          {(isLoading || ongoingQuery) && (
             <div className="message bot">
               <div className="message-avatar">
                 <Bot size={20} />
@@ -562,7 +986,7 @@ What would you like to investigate?`,
               <div className="message-content">
                 <div className="message-bubble loading">
                   <Loader size={16} className="loading-icon" />
-                  <span>Analyzing...</span>
+                  <span>Analyzing{ongoingQuery ? `: "${ongoingQuery}"` : '...'}</span>
                 </div>
               </div>
             </div>

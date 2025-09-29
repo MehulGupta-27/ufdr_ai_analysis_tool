@@ -1,123 +1,337 @@
 .header {
-  height: 70px;
-  background: white;
-  border-bottom: 1px solid #e0e0e0;
+  height: 75px;
+  background: linear-gradient(135deg, #ffffff 0%, #fafbfd 100%);
+  border-bottom: 1px solid #e8edf2;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 0 32px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+}
+
+.header::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    #007bff 25%, 
+    #00d4ff 50%, 
+    #007bff 75%, 
+    transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 4s linear infinite;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.header:hover::before {
+  opacity: 1;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 20px;
 }
 
 .mobile-menu-btn {
   display: none;
-  background: none;
-  border: none;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border: 1px solid #dee2e6;
   cursor: pointer;
-  padding: 8px;
-  border-radius: 6px;
-  color: #666;
-  transition: all 0.2s ease;
+  padding: 10px;
+  border-radius: 10px;
+  color: #495057;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.mobile-menu-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
 .mobile-menu-btn:hover {
-  background-color: #f5f5f5;
-  color: #007bff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 123, 255, 0.3);
+  border-color: #007bff;
+}
+
+.mobile-menu-btn:hover::before {
+  opacity: 1;
+}
+
+.mobile-menu-btn:hover svg {
+  color: white !important;
+  position: relative;
+  z-index: 1;
+}
+
+.mobile-menu-btn:active {
+  transform: translateY(0) scale(0.95);
 }
 
 .header-title {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  padding: 8px 0;
+  transition: transform 0.3s ease;
+}
+
+.header-title:hover {
+  transform: translateX(4px);
 }
 
 .header-icon {
   color: #007bff;
+  filter: drop-shadow(0 2px 8px rgba(0, 123, 255, 0.3));
+  transition: all 0.3s ease;
+}
+
+.header-title:hover .header-icon {
+  transform: scale(1.1) rotate(5deg);
+  filter: drop-shadow(0 4px 12px rgba(0, 123, 255, 0.5));
 }
 
 .header-title h1 {
-  font-size: 20px;
-  font-weight: 700;
-  color: #333;
+  font-size: 22px;
+  font-weight: 800;
+  background: linear-gradient(135deg, #1e293b 0%, #475569 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   margin: 0;
+  letter-spacing: -0.5px;
+  position: relative;
+}
+
+.header-title h1::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #007bff 0%, #00d4ff 100%);
+  transition: width 0.3s ease;
+}
+
+.header-title:hover h1::after {
+  width: 100%;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 24px;
 }
 
 .case-badge {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
   color: white;
-  padding: 8px 16px;
-  border-radius: 20px;
+  padding: 10px 20px;
+  border-radius: 24px;
   font-size: 14px;
   font-weight: 600;
+  box-shadow: 0 6px 20px rgba(0, 123, 255, 0.3), 0 2px 8px rgba(0, 123, 255, 0.2);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.case-badge::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.2) 0%, transparent 70%);
+  animation: rotate 4s linear infinite;
+}
+
+@keyframes rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.case-badge:hover {
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 10px 30px rgba(0, 123, 255, 0.4), 0 4px 12px rgba(0, 123, 255, 0.3);
 }
 
 .case-label {
-  opacity: 0.9;
+  opacity: 0.95;
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+  position: relative;
+  z-index: 1;
 }
 
 .case-number {
-  font-weight: 700;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.3px;
+  position: relative;
+  z-index: 1;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
 }
 
 .status-indicator {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: 14px;
-  color: #666;
+  color: #475569;
+  font-weight: 600;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.status-indicator:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
 }
 
 .status-dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  background-color: #ccc;
+  background-color: #cbd5e1;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 0 0 rgba(203, 213, 225, 0.7);
+  position: relative;
+}
+
+.status-dot::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  transition: border-color 0.3s ease;
 }
 
 .status-dot.active {
-  background-color: #4caf50;
-  animation: pulse 2s infinite;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  animation: pulse-active 2s infinite;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.6);
 }
 
-@keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7);
+.status-dot.active::before {
+  border-color: rgba(16, 185, 129, 0.3);
+  animation: ring 2s infinite;
+}
+
+@keyframes pulse-active {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
   }
-  70% {
-    box-shadow: 0 0 0 10px rgba(76, 175, 80, 0);
+  50% {
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
   }
-  100% {
-    box-shadow: 0 0 0 0 rgba(76, 175, 80, 0);
+}
+
+@keyframes ring {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
   }
+  50% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.status-text {
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+/* Notification Badge (Optional Enhancement) */
+.notification-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  color: white;
+  border: 2px solid white;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+  animation: bounce 2s infinite;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
 
 /* Mobile responsive */
 @media (max-width: 768px) {
   .header {
-    padding: 0 16px;
+    padding: 0 20px;
+    height: 70px;
   }
   
   .mobile-menu-btn {
     display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .header-left {
+    gap: 16px;
   }
   
   .header-title h1 {
     font-size: 18px;
+  }
+  
+  .header-icon {
+    width: 20px;
+    height: 20px;
   }
   
   .case-badge {
@@ -126,5 +340,33 @@
   
   .status-indicator {
     font-size: 12px;
+    padding: 6px 12px;
+    gap: 8px;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+  }
+
+  .header-right {
+    gap: 16px;
+  }
+}
+
+/* Tablet responsive */
+@media (max-width: 1024px) {
+  .header {
+    padding: 0 24px;
+  }
+
+  .case-badge {
+    padding: 8px 16px;
+    font-size: 13px;
+  }
+
+  .case-number {
+    font-size: 14px;
+    padding: 3px 8px;
   }
 }

@@ -240,96 +240,27 @@ async def get_analytics_summary():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting analytics summary: {str(e)}")
 
-@router.get("/graph/network/{case_number}")
-async def get_communication_network(case_number: str):
+@router.get("/graph/network/{case_id}")
+async def get_communication_network(case_id: str):
     """Get communication network from Neo4j for a case"""
     
     try:
-        # Check Neo4j connection first
-        if not neo4j_repo.driver:
-            return JSONResponse(content={
-                "case_number": case_number,
-                "network": [],
-                "total_nodes": 0,
-                "total_relationships": 0,
-                "message": "Neo4j connection not available. Please ensure Neo4j is running and accessible.",
-                "error": "neo4j_connection_failed"
-            })
-        
-        # Test Neo4j connection
-        try:
-            await neo4j_repo.execute_cypher("RETURN 1")
-        except Exception as conn_error:
-            return JSONResponse(content={
-                "case_number": case_number,
-                "network": [],
-                "total_nodes": 0,
-                "total_relationships": 0,
-                "message": f"Neo4j connection test failed: {str(conn_error)}",
-                "error": "neo4j_connection_test_failed"
-            })
-        
-        # Get case info to determine the correct label pattern
-        from app.services.case_manager import case_manager
-        case_info = case_manager.get_case_info(case_number)
-        
-        if not case_info:
-            return JSONResponse(content={
-                "case_number": case_number,
-                "network": [],
-                "total_nodes": 0,
-                "total_relationships": 0,
-                "message": f"Case {case_number} not found"
-            })
-        
-        safe_case_name = case_info["safe_case_name"]
-        person_label = f'Person_{safe_case_name}'
-        
-        # Get all persons for this case using the correct label pattern
-        persons = await neo4j_repo.find_nodes(person_label)
-        
-        if not persons:
-            return JSONResponse(content={
-                "case_number": case_number,
-                "network": [],
-                "total_nodes": 0,
-                "total_relationships": 0,
-                "message": f"No persons found for case {case_number}. Please ensure UFDR data has been processed."
-            })
-        
-        person_ids = [p.get('id', p.get('phone_number', '')) for p in persons if p.get('id') or p.get('phone_number')]
-        
-        if not person_ids:
-            return JSONResponse(content={
-                "case_number": case_number,
-                "network": [],
-                "total_nodes": len(persons),
-                "total_relationships": 0,
-                "message": "No valid person IDs found"
-            })
+        # Get all persons for this case
+        persons = await neo4j_repo.find_nodes('Person', {'case_id': case_id})
+        person_ids = [p['id'] for p in persons]
         
         # Get communication network
         network = await neo4j_repo.find_communication_network(person_ids)
         
         return JSONResponse(content={
-            "case_number": case_number,
+            "case_id": case_id,
             "network": network,
             "total_nodes": len(persons),
             "total_relationships": len(network)
         })
         
     except Exception as e:
-        print(f"❌ Error getting communication network: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(content={
-            "case_number": case_number,
-            "network": [],
-            "total_nodes": 0,
-            "total_relationships": 0,
-            "message": f"Error getting communication network: {str(e)}",
-            "error": "internal_error"
-        })
+        raise HTTPException(status_code=500, detail=f"Error getting communication network: {str(e)}")
 
 @router.get("/graph/centrality")
 async def get_centrality_analysis():
@@ -387,29 +318,6 @@ async def advanced_semantic_search(request: QueryRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in advanced semantic search: {str(e)}")
-
-@router.get("/search/suspicious-conversations")
-async def find_suspicious_conversations(
-    case_number: str,
-    limit: int = 20
-):
-    """Find suspicious conversations using enhanced semantic search"""
-    
-    try:
-        results = await vector_service.find_suspicious_conversations(
-            case_id=case_number,
-            limit=limit
-        )
-        
-        return JSONResponse(content={
-            "case_number": case_number,
-            "results": results,
-            "total_results": len(results),
-            "message": f"Found {len(results)} suspicious conversations"
-        })
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error finding suspicious conversations: {str(e)}")
 
 @router.get("/search/similar-messages")
 async def find_similar_messages(
@@ -706,30 +614,16 @@ async def health_check():
         # Test vector service
         try:
             vector_stats = await vector_service.get_collection_stats()
-            if vector_stats.get("status") == "connected":
-                status["databases"]["qdrant"] = "connected"
-                status["qdrant_stats"] = vector_stats
-            else:
-                status["databases"]["qdrant"] = f"disconnected: {vector_stats.get('reason', 'Unknown error')}"
-        except Exception as e:
-            status["databases"]["qdrant"] = f"disconnected: {str(e)}"
+            status["databases"]["qdrant"] = "connected"
+        except:
+            status["databases"]["qdrant"] = "disconnected"
         
         # Test Neo4j
         try:
-            if neo4j_repo.driver:
-                await neo4j_repo.execute_cypher("RETURN 1")
-                status["databases"]["neo4j"] = "connected"
-            else:
-                status["databases"]["neo4j"] = "disconnected"
-        except Exception as e:
-            status["databases"]["neo4j"] = f"disconnected: {str(e)}"
-        
-        # Test Redis
-        try:
-            redis_status = db_manager.ping_redis()
-            status["databases"]["redis"] = "connected" if redis_status else "disconnected"
+            await neo4j_repo.execute_cypher("RETURN 1")
+            status["databases"]["neo4j"] = "connected"
         except:
-            status["databases"]["redis"] = "disconnected"
+            status["databases"]["neo4j"] = "disconnected"
         
         return JSONResponse(content=status)
         
